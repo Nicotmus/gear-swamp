@@ -1,4 +1,4 @@
-# app.py --- Gear Swamp（招待制・LINE通知・リマインダー・CSV一括・アーカイブ/削除・管理者UI）
+# app.py --- Gear Swamp（招待制・LINE通知・リマインダー・CSV一括・アーカイブ/削除・管理者UI・自分の名前変更）
 import os, csv, sqlite3, qrcode, requests
 from io import BytesIO, StringIO
 from contextlib import contextmanager
@@ -344,7 +344,7 @@ with tab_list:
                     conn.execute("UPDATE items SET status=? WHERE id=?", (new_status, i))
                 log(member,"STATUS_UPDATE",f"{nm}=>{new_status}"); st.success("更新しました。"); st.rerun()
 
-            # アーカイブ & 削除（安全に下側へ）
+            # アーカイブ & 削除
             st.markdown("---")
             colX, colY, colZ = st.columns(3)
             if colX.button("📦 アーカイブ", key=f"arc{i}") and login and is_active(member):
@@ -378,6 +378,27 @@ with tab_logs:
 # -------------------------
 with tab_mem:
     st.subheader("メンバー一覧")
+
+    # --- 自分の名前をセルフ編集 ---
+    st.markdown("### ✏️ 自分の名前を変更")
+    if login and is_active(member):
+        new_my_name = st.text_input(
+            "新しい自分の名前",
+            value=member,
+            key="self_rename"
+        )
+        if st.button("📝 自分の名前を変更", key="self_rename_btn"):
+            if new_my_name and new_my_name != member:
+                ok = rename_member(member, new_my_name)
+                if ok:
+                    st.success(f"{member} → {new_my_name} に変更しました。")
+                    st.info("※ 次回からサイドバーの『あなたの名前』も新しい名前でログインしてください。")
+                else:
+                    st.error("名前の変更に失敗しました。")
+    else:
+        st.caption("※ 認証済みメンバーだけ自分の名前を変更できます。")
+
+    # 一覧表示
     with get_conn() as c:
         ms=c.execute("SELECT name, insta, is_active FROM members ORDER BY name").fetchall()
     for n, i, a in ms:
@@ -465,5 +486,7 @@ with tab_csv:
                 count += 1
         log(member or "importer","CSV_IMPORT",f"{count} items")
         st.success(f"{count} 件 登録しました。")
+
+
 
 
