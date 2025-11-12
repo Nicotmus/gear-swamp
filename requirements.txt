@@ -1,0 +1,5 @@
+streamlit
+pillow
+qrcode
+requests
+python-dateutil
