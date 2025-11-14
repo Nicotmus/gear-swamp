@@ -2,7 +2,10 @@
 # app.py --- Gear Swamp（完全版）
 # 招待制 / Admin管理 / 在庫・貸出・予約 / 掲示板 / CSV / 写真 /
 # カテゴリ・所有者・状態フィルタ / 自分の名前変更 / 返却目安90日
+# 掲示板投稿は管理者のみ削除可能
+# 💾 DBバックアップ＆復元（手動）付き
 # ================================================================
+import os
 import csv
 import sqlite3
 from io import BytesIO, StringIO
@@ -279,8 +282,8 @@ with st.sidebar:
 # ================================================================
 # タブ構成
 # ================================================================
-tab_inv, tab_list, tab_logs, tab_mem, tab_bbs, tab_csv = st.tabs(
-    ["➕在庫登録", "📦在庫/貸出/予約", "📜履歴", "👥メンバー", "🗣掲示板", "📥CSV"]
+tab_inv, tab_list, tab_logs, tab_mem, tab_bbs, tab_csv, tab_backup = st.tabs(
+    ["➕在庫登録", "📦在庫/貸出/予約", "📜履歴", "👥メンバー", "🗣掲示板", "📥CSV", "💾バックアップ"]
 )
 
 # ================================================================
@@ -539,7 +542,7 @@ with tab_mem:
 
 
 # ================================================================
-# 掲示板タブ
+# 掲示板タブ（投稿は管理者のみ削除可能）
 # ================================================================
 with tab_bbs:
     st.subheader("🗣 掲示板（試乗・貸し借り・雑談）")
@@ -613,7 +616,8 @@ with tab_bbs:
                     st.write(body)
 
                 insta_user = get_insta(author)
-                colx, coly = st.columns(2)
+                colx, coly, colz = st.columns(3)
+
                 if insta_user:
                     insta_url = f"https://instagram.com/{insta_user}"
                     colx.markdown(f"[📷 @{insta_user} へDM](<{insta_url}>)")
@@ -622,9 +626,17 @@ with tab_bbs:
                 share_text = f"[Gear Swamp掲示板]\n[{ptype}] {title}\n{body}\nfrom {author}"
                 coly.code(share_text, language="text")
 
+                # 管理者のみ投稿削除
+                if is_admin(member):
+                    if colz.button("🗑️ 投稿削除", key=f"del_post_{pid}"):
+                        with get_conn() as c2:
+                            c2.execute("DELETE FROM posts WHERE id=?", (pid,))
+                        st.success("投稿を削除しました。")
+                        st.rerun()
+
 
 # ================================================================
-# CSVタブ
+# CSVタブ（在庫のみ）
 # ================================================================
 with tab_csv:
     st.subheader("CSV一括登録（在庫）")
@@ -636,7 +648,7 @@ with tab_csv:
         ["700C Front Wheel", "ホイール", "700C/100x12", "美品", "TETSUYA", "自宅A", "ハブDT350"]
     )
     w.writerow(
-        ["11s Cassette 11-28", "スプロケット/フリー", "HG 11s", "使用感あり", "TETSUYA", "自宅B", "軽微摩耗"]
+        ["11s Cassette 11-28", "スプロケット/コグ", "HG 11s", "使用感あり", "TETSUYA", "自宅B", "軽微摩耗"]
     )
     st.download_button(
         "テンプレCSVをダウンロード",
@@ -670,9 +682,46 @@ with tab_csv:
         st.success(f"{count} 件 登録しました。")
 
 
+# ================================================================
+# 💾 バックアップタブ（DB丸ごとバックアップ＆復元）
+# ================================================================
+with tab_backup:
+    st.subheader("💾 DBバックアップ & 復元")
 
+    st.markdown(
+        "この機能は **`parts_share.db` をそのままバックアップ／復元** します。"
+        "在庫・貸出・メンバー・掲示板など、すべてのデータが含まれます。"
+    )
 
+    st.markdown("### 1) バックアップをダウンロード")
 
+    if os.path.exists(DB_PATH):
+        with open(DB_PATH, "rb") as f:
+            db_bytes = f.read()
+        default_name = f"gearswamp_backup_{date.today().isoformat()}.db"
+        st.download_button(
+            "📥 DBバックアップをダウンロード",
+            data=db_bytes,
+            file_name=default_name,
+            mime="application/octet-stream",
+        )
+    else:
+        st.warning("DBファイルがまだ存在していません。（登録がまだない可能性があります）")
 
+    st.divider()
+    st.markdown("### 2) バックアップから復元")
 
+    st.caption(
+        "⚠️ **注意**：復元すると現在のDBは上書きされます。元に戻せるように、先にバックアップのダウンロードを推奨します。"
+    )
 
+    up_db = st.file_uploader("復元用バックアップファイル（.db）を選択", type=["db"])
+    if up_db and st.button("⚠️ このバックアップで復元する"):
+        try:
+            bytes_data = up_db.read()
+            with open(DB_PATH, "wb") as f:
+                f.write(bytes_data)
+            st.success("バックアップから復元しました。画面を再読み込みします。")
+            st.rerun()
+        except Exception as e:
+            st.error(f"復元中にエラーが発生しました: {e}")
