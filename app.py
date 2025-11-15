@@ -4,7 +4,7 @@
 # カテゴリ・所有者・状態フィルタ / 自分の名前変更 / 返却目安90日
 # 掲示板投稿は管理者のみ削除可能
 # 💾 DBバックアップ＆復元（手動）付き
-# 在庫カードに「詳細」表示付き
+# 背景イラスト適用＋在庫カードに「詳細」表示
 # ================================================================
 import os
 import csv
@@ -13,6 +13,7 @@ from io import BytesIO, StringIO
 from contextlib import contextmanager
 from datetime import date, timedelta
 
+import base64
 import qrcode
 import streamlit as st
 from PIL import Image
@@ -45,6 +46,37 @@ st.set_page_config(
     page_icon="icon_gearswamp.png",  # リポジトリ直下に置く
     layout="wide",
 )
+
+# 背景画像を適用
+def set_background(image_path: str):
+    """指定した画像をアプリ全体の背景に敷く"""
+    try:
+        with open(image_path, "rb") as f:
+            data = f.read()
+        encoded = base64.b64encode(data).decode()
+        st.markdown(
+            f"""
+            <style>
+            .stApp {{
+                background: url("data:image/png;base64,{encoded}");
+                background-size: cover;
+                background-position: center;
+                background-attachment: fixed;
+            }}
+            /* コンテンツ部分に半透明のダークオーバーレイをかけて可読性UP */
+            .stApp > div {{
+                background-color: rgba(0,0,0,0.45);
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+    except Exception as e:
+        st.write("背景設定エラー:", e)
+
+# Gear Swamp 背景を適用
+set_background("bg_gearswamp.png")
+
 st.markdown("<style>.stButton>button{width:100%;padding:.7rem;font-weight:600}</style>", unsafe_allow_html=True)
 st.title("🛠️ Gear Swamp Collective")
 
@@ -140,7 +172,7 @@ def log(m, a, d):
 
 
 # ================================================================
-# ユーティリティ
+# 共通ユーティリティ
 # ================================================================
 def img_to_blob(img, max_px=1400):
     if not img:
@@ -733,5 +765,7 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
+
 
 
