@@ -4,6 +4,7 @@
 # カテゴリ・所有者・状態フィルタ / 自分の名前変更 / 返却目安90日
 # 掲示板投稿は管理者のみ削除可能
 # 💾 DBバックアップ＆復元（手動）付き
+# 在庫カードに「詳細」表示付き
 # ================================================================
 import os
 import csv
@@ -328,12 +329,12 @@ with tab_list:
 
     def list_items():
         with get_conn() as c:
-            q = "SELECT id,name,category,owner,status,photo FROM items WHERE 1=1"
+            q = "SELECT id,name,category,size,condition,owner,location,note,status,photo FROM items WHERE 1=1"
             p = []
             if kw:
-                q += " AND (name LIKE ? OR owner LIKE ? OR note LIKE ?)"
+                q += " AND (name LIKE ? OR owner LIKE ? OR note LIKE ? OR size LIKE ?)"
                 like = f"%{kw}%"
-                p += [like, like, like]
+                p += [like, like, like, like]
             if f_cat:
                 q += f" AND category IN ({','.join(['?']*len(f_cat))})"
                 p += f_cat
@@ -348,12 +349,19 @@ with tab_list:
             q += " ORDER BY status DESC, category, name"
             return c.execute(q, p).fetchall()
 
-    for i, nm, cat, owner, status, photo in list_items():
+    for i, nm, cat, size, cond, owner, loc, note, status, photo in list_items():
         with st.container(border=True):
             img = blob_to_img(photo)
             if img:
                 st.image(img, use_column_width=True)
-            st.markdown(f"**{nm}** / {cat} / 所有:{owner} / 状態:{status}")
+
+            st.markdown(f"**{nm}**")
+            st.caption(f"{cat} / サイズ:{size or '-'} / 状態:{cond} / 所有:{owner} / ステータス:{status}")
+
+            # 詳細エリア（保管場所・備考）
+            with st.expander("詳細", expanded=False):
+                st.caption(f"保管場所: {loc or '-'}")
+                st.write(note or "備考なし")
 
             col1, col2, col3, col4 = st.columns(4)
 
@@ -725,3 +733,5 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
+
