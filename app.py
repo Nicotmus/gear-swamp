@@ -65,7 +65,7 @@ def set_background(image_path: str):
             }}
             /* コンテンツ部分に半透明のダークオーバーレイをかけて可読性UP */
             .stApp > div {{
-                background-color: rgba(0,0,0,0.3);
+                background-color: rgba(0,0,0,0.15);
             }}
             </style>
             """,
@@ -765,6 +765,7 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
 
 
 
