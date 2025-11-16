@@ -23,9 +23,9 @@ from dateutil.parser import parse as dt_parse
 # 設定
 # ================================================================
 DB_PATH = "parts_share.db"
-SHARED_PASSCODE = st.secrets.get("passcode", "1234")
+SHARED_PASSCODE = st.secrets.get("passcode", "0210")
 INVITE_CODE = st.secrets.get("invite_code", "join-123")
-ADMIN_USERS = set(st.secrets.get("admin_users", []))  # 例: ["TETSUYA"]
+ADMIN_USERS = set(st.secrets.get("admin_users", []))  # 例: ["Furuichi]
 
 # LINE Notifyは終了のためダミー関数（将来Messaging API等に差し替え用フック）
 def notify_line(msg: str) -> bool:
@@ -65,7 +65,7 @@ def set_background(image_path: str):
             }}
             /* コンテンツ部分に半透明のダークオーバーレイをかけて可読性UP */
             .stApp > div {{
-                background-color: rgba(0,0,0,0.5);
+                background-color: rgba(0,0,0,0.1)
             }}
             </style>
             """,
@@ -765,6 +765,7 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
 
 
 
