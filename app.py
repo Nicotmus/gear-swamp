@@ -65,7 +65,7 @@ def set_background(image_path: str):
             }}
             /* コンテンツ部分に半透明のダークオーバーレイをかけて可読性UP */
             .stApp > div {{
-                background-color: rgba(0,0,0,0.2)
+                background-color: rgba(0,0,0,0.7)
             }}
             </style>
             """,
@@ -316,7 +316,7 @@ with st.sidebar:
 # タブ構成
 # ================================================================
 tab_inv, tab_list, tab_logs, tab_mem, tab_bbs, tab_csv, tab_backup = st.tabs(
-    ["➕在庫登録", "📦在庫/貸出/予約","🗣掲示板", "📜履歴", "👥メンバー",  "📥CSV", "💾バックアップ"]
+    ["➕在庫登録", "📦在庫/貸出/予約","📜履歴", "👥メンバー", "🗣掲示板",  "📥CSV", "💾バックアップ"]
 )
 
 # ================================================================
@@ -765,6 +765,7 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
 
 
 
