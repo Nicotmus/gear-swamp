@@ -5,7 +5,7 @@
 # 掲示板投稿は管理者のみ削除可能
 # 💾 DBバックアップ＆復元（手動）付き
 # 背景イラスト＋文字色白統一＋入力欄黒ベース白文字
-# 在庫カード＆掲示板に LINE共有ボタン付き
+# 「借りる」後にだけ LINE共有ボタン表示
 # ================================================================
 import os
 import csv
@@ -49,9 +49,9 @@ st.set_page_config(
     layout="wide",
 )
 
-# 背景画像を適用＋全体ダークテーマ（文字白・入力欄黒）
+# 背景画像を適用＋全体ダークテーマ（OSテーマに依存しない）
 def set_background(image_path: str):
-    """背景画像を敷きつつ、全体をダークテーマで白文字＆黒入力欄にする"""
+    """背景画像を敷きつつ、完全ダークテーマで白文字＆黒入力欄にする"""
     try:
         with open(image_path, "rb") as f:
             data = f.read()
@@ -59,6 +59,12 @@ def set_background(image_path: str):
         st.markdown(
             f"""
             <style>
+            /* OSテーマ無視で常にダーク背景 */
+            html, body {{
+                background-color: #000000 !important;
+                color: #f5f5f5 !important;
+            }}
+
             /* 背景画像（全体） */
             .stApp {{
                 background: url("data:image/png;base64,{encoded}");
@@ -69,7 +75,7 @@ def set_background(image_path: str):
 
             /* 全体にうっすら暗いオーバーレイをかけて、テキストの乗りをよくする */
             .stApp > div {{
-                background-color: rgba(0,0,0,0.2);
+                background-color: rgba(0,0,0,0.4);
             }}
 
             /* 全テキストを白寄りに統一（メイン＆サイドバー両方） */
@@ -439,7 +445,6 @@ with tab_list:
                 f"状態:{cond}\n所有:{owner}\n保管:{loc or '-'}\n備考:{note or '-'}"
             )
             item_line_url = "https://line.me/R/msg/text/?" + quote(item_share_text)
-            st.markdown(f"[📩 このパーツをLINEで共有]({item_line_url})")
 
             col1, col2, col3, col4 = st.columns(4)
 
@@ -454,8 +459,9 @@ with tab_list:
                         (i, member, str(today), str(due)),
                     )
                     conn.execute("UPDATE items SET status='貸出中' WHERE id=?", (i,))
-                st.success("借用登録しました（返却目安90日）")
-                st.rerun()
+                # 最後に借りたパーツIDを記録 → このカードだけLINE共有ボタンを出す
+                st.session_state["last_borrowed_item_id"] = i
+                st.success("借用登録しました（返却目安90日）。下のボタンからLINEで共有できます。")
 
             # 返却（シンプルに在庫ありに戻す）
             if col2.button("📤 返却", key=f"r{i}") and login and is_active(member) and status == "貸出中":
@@ -470,6 +476,8 @@ with tab_list:
                             (str(date.today()), loan[0]),
                         )
                     conn.execute("UPDATE items SET status='在庫あり' WHERE id=?", (i,))
+                # 返却したら共有対象はクリア
+                st.session_state["last_borrowed_item_id"] = None
                 st.success("返却しました（在庫ありに戻しました）")
                 st.rerun()
 
@@ -501,6 +509,11 @@ with tab_list:
                     conn.execute("UPDATE items SET status=? WHERE id=?", (new_st, i))
                 st.success("状態を更新しました")
                 st.rerun()
+
+            # 「最後に借りたパーツ」だけLINE共有ボタンを表示
+            last_id = st.session_state.get("last_borrowed_item_id")
+            if last_id == i:
+                st.markdown(f"[📩 この貸出をLINEで共有]({item_line_url})")
 
             st.divider()
             ax, ay, az = st.columns(3)
@@ -812,6 +825,8 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
+
 
 
 
