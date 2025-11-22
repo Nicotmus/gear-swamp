@@ -49,7 +49,8 @@ st.set_page_config(
 
 # 背景画像を適用＋文字色調整
 def set_background(image_path: str):
-    """指定した画像をアプリ全体の背景に敷き、文字色も見やすくする"""
+    """指定した画像をアプリ全体の背景に敷きつつ、
+    メインコンテンツだけ暗く＆文字を明るくする"""
     try:
         with open(image_path, "rb") as f:
             data = f.read()
@@ -57,22 +58,26 @@ def set_background(image_path: str):
         st.markdown(
             f"""
             <style>
+            /* 背景画像（全体） */
             .stApp {{
                 background: url("data:image/png;base64,{encoded}");
                 background-size: cover;
                 background-position: center;
                 background-attachment: fixed;
             }}
-            /* コンテンツ部分に半透明オーバーレイ（少し暗め） */
-            .stApp > div {{
+
+            /* メインコンテンツ部分だけ半透明オーバーレイ＋白文字 */
+            section.main {{
                 background-color: rgba(0,0,0,0.35);
             }}
-            /* テキストを明るくして可読性UP */
-            .stApp, .stApp p, .stApp li, .stApp span, .stApp label, .stApp div {{
+            section.main, section.main * {{
                 color: #f5f5f5 !important;
             }}
-            h1, h2, h3, h4, h5, h6 {{
-                color: #ffffff !important;
+
+            /* サイドバーはテーマ標準のまま（文字色はいじらない） */
+            section[data-testid="stSidebar"] *, 
+            section[data-testid="stSidebar"] label {{
+                color: inherit !important;
             }}
             </style>
             """,
@@ -80,6 +85,7 @@ def set_background(image_path: str):
         )
     except Exception as e:
         st.write("背景設定エラー:", e)
+
 
 # Gear Swamp 背景を適用
 set_background("bg_gearswamp.png")
@@ -779,6 +785,7 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
 
 
 
