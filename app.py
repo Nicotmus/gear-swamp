@@ -1,11 +1,12 @@
 # ================================================================
-# app.py --- Gear Swamp（完全版・ダークテーマ統一版）
+# app.py --- Gear Swamp（完全版）
 # 招待制 / Admin管理 / 在庫・貸出・予約 / 掲示板 / CSV / 写真 /
 # カテゴリ・所有者・状態フィルタ / 自分の名前変更 / 返却目安90日
 # 掲示板投稿は管理者のみ削除可能
 # 💾 DBバックアップ＆復元（手動）付き
-# 背景イラスト＋文字色白統一＋入力欄黒ベース白文字
-# 「借りる」後にだけ LINE共有ボタン表示
+# 完全ダークテーマ（OSのダーク/ライトに依存しない）
+# 入力欄はすべて黒ベース＋白文字
+# 「借りる」後にそのパーツだけ LINE共有ボタン表示
 # ================================================================
 import os
 import csv
@@ -13,7 +14,7 @@ import sqlite3
 from io import BytesIO, StringIO
 from contextlib import contextmanager
 from datetime import date, timedelta
-from urllib.parse import quote  # LINE共有用URLエンコード
+from urllib.parse import quote
 import base64
 
 import qrcode
@@ -29,8 +30,8 @@ SHARED_PASSCODE = st.secrets.get("passcode", "1234")
 INVITE_CODE = st.secrets.get("invite_code", "join-123")
 ADMIN_USERS = set(st.secrets.get("admin_users", []))  # 例: ["TETSUYA"]
 
-# LINE Notifyは終了のためダミー関数（将来Messaging API等に差し替え用フック）
 def notify_line(msg: str) -> bool:
+    """将来Messaging APIに差し替える用のダミー"""
     return False
 
 CATEGORIES = [
@@ -49,9 +50,11 @@ st.set_page_config(
     layout="wide",
 )
 
-# 背景画像を適用＋全体ダークテーマ（OSテーマに依存しない）
+# ================================================================
+# テーマ＆背景（完全ダーク固定）
+# ================================================================
 def set_background(image_path: str):
-    """背景画像を敷きつつ、完全ダークテーマで白文字＆黒入力欄にする"""
+    """背景画像を敷きつつ、完全ダークテーマで統一（OSテーマに依存しない）"""
     try:
         with open(image_path, "rb") as f:
             data = f.read()
@@ -59,36 +62,37 @@ def set_background(image_path: str):
         st.markdown(
             f"""
             <style>
-            /* OSテーマ無視で常にダーク背景 */
+            /* OSのダーク/ライトに関係なく、常に黒背景＋白文字ベースにする */
             html, body {{
-                background-color: #000000 !important;
+                background-color: #000000 !line-height:1.4;
                 color: #f5f5f5 !important;
             }}
 
-            /* 背景画像（全体） */
+            /* アプリ本体に背景画像＋薄いオーバーレイ */
             .stApp {{
-                background: url("data:image/png;base64,{encoded}");
+                background: url("data:image/png;base64,{encoded}") no-repeat center center fixed;
                 background-size: cover;
-                background-position: center;
-                background-attachment: fixed;
             }}
-
-            /* 全体にうっすら暗いオーバーレイをかけて、テキストの乗りをよくする */
             .stApp > div {{
-                background-color: rgba(0,0,0,0.4);
+                background-color: rgba(0,0,0,0.40);
             }}
 
-            /* 全テキストを白寄りに統一（メイン＆サイドバー両方） */
+            /* 全テキストを白系で統一（メイン＋サイドバー共通） */
             .stApp, .stApp p, .stApp li, .stApp span,
-            .stApp label, .stApp div, .stApp th, .stApp td {{
+            .stApp label, .stApp div, .stMarkdown, .stTextInput label,
+            .stCheckbox, .stRadio, .stSelectbox, .stMultiSelect, .stDateInput, .stTextArea {{
                 color: #f5f5f5 !important;
             }}
-            .stApp h1, .stApp h2, .stApp h3,
-            .stApp h4, .stApp h5, .stApp h6 {{
+            .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {{
                 color: #ffffff !important;
             }}
 
-            /* 入力系コンポーネント：黒ベース＆白文字 */
+            /* サイドバーの背景も暗く（スマホ/PC共通） */
+            section[data-testid="stSidebar"] {{
+                background-color: #111111 !important;
+            }}
+
+            /* 全ての入力系コンポーネントを黒ベース＋白文字に統一 */
             .stApp input,
             .stApp textarea,
             .stApp select {{
@@ -96,18 +100,31 @@ def set_background(image_path: str):
                 background-color: #222222 !important;
                 border: 1px solid #555555 !important;
             }}
-
-            /* Streamlit固有のTextInputラッパーにも適用 */
-            .stApp div[data-baseweb="input"] input {{
-                color: #f5f5f5 !important;
+            /* BaseWebコンポーネント（TextInput / Select など） */
+            .stApp div[data-baseweb="input"],
+            .stApp div[data-baseweb="select"],
+            .stApp div[data-baseweb="textarea"] {{
                 background-color: #222222 !important;
-            }}
-            .stApp textarea {{
                 color: #f5f5f5 !important;
-                background-color: #222222 !important;
+            }}
+            .stApp div[data-baseweb="input"] input,
+            .stApp div[data-baseweb="select"] * ,
+            .stApp div[data-baseweb="textarea"] textarea {{
+                color: #f55f5 !important;
             }}
 
-            /* ボタン文字も白寄りに */
+            /* ファイルアップローダーも暗めに */
+            [data-testid="stFileUploader"] > section {{
+                background-color: #222222 !important;
+                color: #f5f5f5 !important;
+                border-radius: 0.5rem;
+            }}
+            [data-testid="stFileUploader"] div[role="button"] {{
+                background-color: #333333 !important;
+                color: #f5f5f5 !important;
+            }}
+
+            /* ボタン文字も白 */
             .stButton>button {{
                 color: #f5f5f5 !important;
             }}
@@ -116,17 +133,12 @@ def set_background(image_path: str):
             unsafe_allow_html=True,
         )
     except Exception as e:
-        st.write("背景設定エラー:", e)
+        st.write("背景CSSエラー:", e)
 
-# Gear Swamp 背景を適用
 set_background("bg_gearswamp.png")
 
-st.markdown("<style>.stButton>button{width:100%;padding:.7rem;font-weight:600}</style>", unsafe_allow_html=True)
-st.title("🛠️ Gear Swamp Collective")
-
-
 # ================================================================
-# DBユーティリティ
+# DB & 共通ユーティリティ
 # ================================================================
 @contextmanager
 def get_conn():
@@ -139,7 +151,7 @@ def get_conn():
         conn.close()
 
 
-def init_db():
+def init_all_tables():
     with get_conn() as c:
         c.executescript(
             """
@@ -160,7 +172,7 @@ def init_db():
             owner TEXT,
             location TEXT,
             note TEXT,
-            status TEXT DEFAULT '在庫あり', -- 在庫あり / 貸出中 / 整備中 / アーカイブ
+            status TEXT DEFAULT '在庫あり',
             photo BLOB
         );
 
@@ -173,7 +185,7 @@ def init_db():
             reminder_days INTEGER,
             last_notified TEXT,
             returned_date TEXT,
-            status TEXT DEFAULT '貸出中', -- 貸出中 / 返却済
+            status TEXT DEFAULT '貸出中',
             FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
         );
 
@@ -206,18 +218,6 @@ def init_db():
         """
         )
 
-
-def log(m, a, d):
-    with get_conn() as c:
-        c.execute(
-            "INSERT INTO logs(ts,member,action,detail) VALUES(?,?,?,?)",
-            (str(date.today()), m, a, d),
-        )
-
-
-# ================================================================
-# 共通ユーティリティ
-# ================================================================
 def img_to_blob(img, max_px=1400):
     if not img:
         return None
@@ -227,14 +227,12 @@ def img_to_blob(img, max_px=1400):
     img.save(b, format="JPEG", quality=85, optimize=True)
     return b.getvalue()
 
-
 def blob_to_img(blob, thumb_px=900):
     if not blob:
         return None
     i = Image.open(BytesIO(blob))
     i.thumbnail((thumb_px, thumb_px))
     return i
-
 
 def compute_due(start, days):
     try:
@@ -243,10 +241,7 @@ def compute_due(start, days):
         s = date.today()
     return s + timedelta(days=days)
 
-
-# ================================================================
-# メンバー関連
-# ================================================================
+# メンバー系
 def upsert_member(name, insta=None, activate=False):
     if not name:
         return
@@ -264,7 +259,6 @@ def upsert_member(name, insta=None, activate=False):
                 (name, insta, 1 if activate else 0, str(date.today())),
             )
 
-
 def is_active(user):
     if not user:
         return False
@@ -272,18 +266,12 @@ def is_active(user):
         r = c.execute("SELECT is_active FROM members WHERE name=?", (user,)).fetchone()
         return bool(r and r[0] == 1)
 
-
 def get_insta(user):
     if not user:
         return None
     with get_conn() as c:
         r = c.execute("SELECT insta FROM members WHERE name=?", (user,)).fetchone()
         return r[0] if r and r[0] else None
-
-
-def is_admin(user):
-    return bool(user) and user in ADMIN_USERS
-
 
 def rename_member(old_name, new_name):
     if not old_name or not new_name or old_name == new_name:
@@ -296,7 +284,6 @@ def rename_member(old_name, new_name):
         c.execute("UPDATE posts SET author=? WHERE author=?", (new_name, old_name))
     return True
 
-
 def transfer_ownership(frm, to):
     if not frm or not to or frm == to:
         return 0
@@ -304,25 +291,20 @@ def transfer_ownership(frm, to):
         c.execute("UPDATE items SET owner=? WHERE owner=?", (to, frm))
         return c.total_changes
 
-
 def delete_member(member_name):
     with get_conn() as c:
         c.execute("DELETE FROM members WHERE name=?", (member_name,))
         return c.total_changes
 
-
-# ================================================================
 # 初期化
-# ================================================================
-init_db()
+init_all_tables()
 
 # ================================================================
-# サイドバー（認証 / QR共有）
+# サイドバー：認証
 # ================================================================
 with st.sidebar:
     st.subheader("メンバー認証")
 
-    # 名前をセッションに保持（ブラウザ開いてる間は記憶）
     default_name = st.session_state.get("member", "")
     member = st.text_input("あなたの名前", value=default_name)
     st.session_state["member"] = member
@@ -357,10 +339,10 @@ with st.sidebar:
         st.image(qr, caption="このQRを仲間に配布", use_column_width=True)
 
 # ================================================================
-# タブ構成（在庫登録 / 貸出 / 掲示板 / 履歴 / メンバー / CSV / バックアップ）
+# タブ構成
 # ================================================================
-tab_inv, tab_list, tab_bbs, tab_logs, tab_mem, tab_csv, tab_backup = st.tabs(
-    ["➕在庫登録", "📦在庫/貸出/予約", "🗣掲示板", "📜履歴", "👥メンバー", "📥CSV", "💾バックアップ"]
+tab_inv, tab_list, tab_logs, tab_mem, tab_bbs, tab_csv, tab_backup = st.tabs(
+    ["➕在庫登録", "📦在庫/貸出/予約", "📜履歴", "👥メンバー", "🗣掲示板", "📥CSV", "💾バックアップ"]
 )
 
 # ================================================================
@@ -389,7 +371,6 @@ with tab_inv:
                 (name, cat, size, cond, owner, loc, note, blob),
             )
         st.success("登録しました。")
-
 
 # ================================================================
 # 在庫/貸出/予約タブ
@@ -425,6 +406,8 @@ with tab_list:
             q += " ORDER BY status DESC, category, name"
             return c.execute(q, p).fetchall()
 
+    last_borrowed_id = st.session_state.get("last_borrowed_item_id")
+
     for i, nm, cat, size, cond, owner, loc, note, status, photo in list_items():
         with st.container(border=True):
             img = blob_to_img(photo)
@@ -434,17 +417,22 @@ with tab_list:
             st.markdown(f"**{nm}**")
             st.caption(f"{cat} / サイズ:{size or '-'} / 状態:{cond} / 所有:{owner} / ステータス:{status}")
 
-            # 詳細エリア（保管場所・備考）
             with st.expander("詳細", expanded=False):
                 st.caption(f"保管場所: {loc or '-'}")
                 st.write(note or "備考なし")
 
-            # このパーツのLINE共有テキスト
+            # このパーツのLINE共有テキスト（在庫／貸出両用に利用）
             item_share_text = (
-                f"[Gear Swamp 在庫]\n{nm}\nカテゴリ:{cat}\nサイズ:{size or '-'}\n"
-                f"状態:{cond}\n所有:{owner}\n保管:{loc or '-'}\n備考:{note or '-'}"
+                f"[Gear Swamp]\n"
+                f"パーツ: {nm}\n"
+                f"カテゴリ: {cat}\n"
+                f"サイズ: {size or '-'}\n"
+                f"状態: {cond}\n"
+                f"所有者: {owner}\n"
+                f"保管場所: {loc or '-'}\n"
+                f"備考: {note or '-'}"
             )
-            item_line_url = "https://line.me/R/msg/text/?" + quote(item_share_text)
+            line_url = f"https://line.me/R/msg/text/?{quote(item_share_text)}"
 
             col1, col2, col3, col4 = st.columns(4)
 
@@ -454,16 +442,16 @@ with tab_list:
                 due = compute_due(str(today), 90)
                 with get_conn() as conn:
                     conn.execute(
-                        """INSERT INTO loans(item_id,borrower,start_date,due_date,reminder_days,status)
+                        """INSERT INTO loans(item_id,borrower,kyrtics
+                            start_date,due_date,reminder_days,status)
                            VALUES(?,?,?,?,90,'貸出中')""",
                         (i, member, str(today), str(due)),
                     )
                     conn.execute("UPDATE items SET status='貸出中' WHERE id=?", (i,))
-                # 最後に借りたパーツIDを記録 → このカードだけLINE共有ボタンを出す
                 st.session_state["last_borrowed_item_id"] = i
-                st.success("借用登録しました（返却目安90日）。下のボタンからLINEで共有できます。")
+                st.success("借用登録しました（返却目安90日）。このパーツをLINEで共有できます👇")
 
-            # 返却（シンプルに在庫ありに戻す）
+            # 返却
             if col2.button("📤 返却", key=f"r{i}") and login and is_active(member) and status == "貸出中":
                 with get_conn() as conn:
                     loan = conn.execute(
@@ -476,12 +464,11 @@ with tab_list:
                             (str(date.today()), loan[0]),
                         )
                     conn.execute("UPDATE items SET status='在庫あり' WHERE id=?", (i,))
-                # 返却したら共有対象はクリア
-                st.session_state["last_borrowed_item_id"] = None
+                st.session_state["last_borrowed_id"] = None
                 st.success("返却しました（在庫ありに戻しました）")
                 st.rerun()
 
-            # 予約（最大3人）
+            # 予約
             if col3.button("⏳ 予約", key=f"s{i}") and login and is_active(member):
                 with get_conn() as conn:
                     pos = conn.execute(
@@ -510,122 +497,23 @@ with tab_list:
                 st.success("状態を更新しました")
                 st.rerun()
 
-            # 「最後に借りたパーツ」だけLINE共有ボタンを表示
-            last_id = st.session_state.get("last_borrowed_item_id")
-            if last_id == i:
-                st.markdown(f"[📩 この貸出をLINEで共有]({item_line_url})")
+            # 「最後に借りたパーツ」のみ LINE共有ボタン表示
+            if st.session_state.get("last_borrowed_item_id") == i:
+                st.markdown(f"[📩 この貸出をLINEで共有]({line_url})")
 
             st.divider()
             ax, ay, az = st.columns(3)
-
-            # アーカイブ
             if ax.button("📦 アーカイブ", key=f"arc{i}") and login and is_active(member):
                 with get_conn() as conn:
                     conn.execute("UPDATE items SET status='アーカイブ' WHERE id=?", (i,))
                 st.rerun()
 
-            # 削除
             confirm = ay.checkbox("削除確認", key=f"cf{i}")
             if az.button("🗑️ 削除", key=f"del{i}") and confirm and login and is_active(member):
                 with get_conn() as conn:
                     conn.execute("DELETE FROM items WHERE id=?", (i,))
                 st.success("削除しました")
                 st.rerun()
-
-
-# ================================================================
-# 掲示板タブ（在庫/貸出の次に表示）
-# ================================================================
-with tab_bbs:
-    st.subheader("🗣 掲示板（試乗・貸し借り・雑談）")
-
-    # 投稿フォーム
-    st.markdown("### 新規投稿")
-    if login and is_active(member):
-        ptype = st.selectbox("種別", POST_TYPES)
-        pcat = st.selectbox("関連カテゴリ（任意）", ["指定なし"] + CATEGORIES)
-        ptitle = st.text_input("タイトル", placeholder="例：誰かピスト試乗させてくれませんか？")
-        pbody = st.text_area("本文", height=100)
-        if st.button("📮 投稿する"):
-            if not ptitle.strip():
-                st.error("タイトルは必須です。")
-            else:
-                with get_conn() as c:
-                    c.execute(
-                        """INSERT INTO posts(author,ptype,category,title,body,created)
-                           VALUES(?,?,?,?,?,?)""",
-                        (
-                            member,
-                            ptype,
-                            None if pcat == "指定なし" else pcat,
-                            ptitle.strip(),
-                            pbody.strip(),
-                            str(date.today()),
-                        ),
-                    )
-                st.success("投稿しました。")
-                st.rerun()
-    else:
-        st.caption("※ 投稿には認証が必要です。")
-
-    st.markdown("### 投稿一覧")
-
-    kw_b = st.text_input("キーワード検索（掲示板）", "")
-    f_type = st.multiselect("種別で絞る", POST_TYPES)
-    f_cat_b = st.multiselect("カテゴリで絞る", CATEGORIES)
-    f_author = st.text_input("投稿者で絞る", "")
-
-    with get_conn() as c:
-        q = "SELECT id,author,ptype,category,title,body,created FROM posts WHERE 1=1"
-        p = []
-        if kw_b:
-            q += " AND (title LIKE ? OR body LIKE ?)"
-            like = f"%{kw_b}%"
-            p += [like, like]
-        if f_type:
-            q += f" AND ptype IN ({','.join(['?']*len(f_type))})"
-            p += f_type
-        if f_cat_b:
-            q += f" AND category IN ({','.join(['?']*len(f_cat_b))})"
-            p += f_cat_b
-        if f_author:
-            q += " AND author LIKE ?"
-            p.append(f"%{f_author}%")
-        q += " ORDER BY id DESC"
-        posts = c.execute(q, p).fetchall()
-
-    if not posts:
-        st.caption("まだ投稿がありません。")
-    else:
-        for pid, author, ptype, cat, title, body, created in posts:
-            with st.container(border=True):
-                st.markdown(f"**[{ptype}] {title}**")
-                meta = f"{created} / 投稿者: {author}"
-                if cat:
-                    meta += f" / カテゴリ: {cat}"
-                st.caption(meta)
-                if body:
-                    st.write(body)
-
-                insta_user = get_insta(author)
-                colx, coly, colz = st.columns(3)
-
-                if insta_user:
-                    insta_url = f"https://instagram.com/{insta_user}"
-                    colx.markdown(f"[📷 @{insta_user} へDM](<{insta_url}>)")
-
-                # LINE共有ボタン（URLスキーム：手動送信）
-                share_text = f"[Gear Swamp掲示板]\n[{ptype}] {title}\n{body}\nfrom {author}"
-                line_url = "https://line.me/R/msg/text/?" + quote(share_text)
-                coly.markdown(f"[📩 LINEで共有]({line_url})")
-
-                # 管理者のみ投稿削除
-                if is_admin(member):
-                    if colz.button("🗑️ 投稿削除", key=f"del_post_{pid}"):
-                        with get_conn() as c2:
-                            c2.execute("DELETE FROM posts WHERE id=?", (pid,))
-                        st.success("投稿を削除しました。")
-                        st.rerun()
 
 
 # ================================================================
@@ -705,8 +593,8 @@ with tab_mem:
                     st.success("更新しました。")
                     st.rerun()
 
+        # 2) 所有アイテム移管 & 3) 削除
         with col2:
-            # 2) 所有アイテム移管
             st.markdown("### 2) 所有アイテムの移管")
             from_m = st.selectbox("移管元", names, index=0, key="admin_from")
             to_m = st.selectbox(
@@ -718,7 +606,6 @@ with tab_mem:
                 st.success(f"{cnt}件のアイテムを {from_m} → {to_m} に移管しました。")
                 st.rerun()
 
-            # 3) メンバー削除
             st.markdown("### 3) メンバー削除")
             del_m = st.selectbox("削除対象", names, index=0, key="admin_del")
             confirm = st.text_input("確認用にメンバー名を入力", key="admin_del_confirm")
@@ -825,6 +712,8 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
+
 
 
 
