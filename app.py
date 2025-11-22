@@ -50,7 +50,8 @@ st.set_page_config(
 # 背景画像を適用＋文字色調整
 def set_background(image_path: str):
     """指定した画像をアプリ全体の背景に敷きつつ、
-    メインコンテンツだけ暗く＆文字を明るくする"""
+    メインは白文字、サイドバーは元の黒文字にする
+    """
     try:
         with open(image_path, "rb") as f:
             data = f.read()
@@ -66,19 +67,23 @@ def set_background(image_path: str):
                 background-attachment: fixed;
             }}
 
-            /* メインコンテンツ部分だけ半透明オーバーレイ＋白文字 */
-            section.main {{
-                background-color: rgba(0,0,0,0.35);
-            }}
-            section.main, section.main * {{
+            /* デフォルトは白っぽい文字に寄せる（メイン用） */
+            .stApp, .stApp p, .stApp li, .stApp span,
+            .stApp label, .stApp div {{
                 color: #f5f5f5 !important;
             }}
-
-            /* サイドバーはテーマ標準のまま（文字色はいじらない） */
-            section[data-testid="stSidebar"] *, 
-            section[data-testid="stSidebar"] label {{
-                color: inherit !important;
+            .stApp h1, .stApp h2, .stApp h3,
+            .stApp h4, .stApp h5, .stApp h6 {{
+                color: #ffffff !important;
             }}
+
+            /* サイドバーだけは元のテーマの文字色に戻す */
+            section[data-testid="stSidebar"] *,
+            section[data-testid="stSidebar"] label {{
+                color: #111111 !important;
+            }}
+
+            /* サイドバーの背景はそのまま（ライトグレー）でOK */
             </style>
             """,
             unsafe_allow_html=True,
@@ -785,6 +790,7 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
 
 
 
