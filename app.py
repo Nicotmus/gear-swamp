@@ -1,11 +1,11 @@
 # ================================================================
-# app.py --- Gear Swamp（完全版）
+# app.py --- Gear Swamp（完全版・ダークテーマ統一版）
 # 招待制 / Admin管理 / 在庫・貸出・予約 / 掲示板 / CSV / 写真 /
 # カテゴリ・所有者・状態フィルタ / 自分の名前変更 / 返却目安90日
 # 掲示板投稿は管理者のみ削除可能
 # 💾 DBバックアップ＆復元（手動）付き
-# 背景イラスト適用＋PC/スマホ両方で見やすい文字色調整
-# LINE共有ボタン（在庫カード＆掲示板）
+# 背景イラスト＋文字色白統一＋入力欄黒ベース白文字
+# 在庫カード＆掲示板に LINE共有ボタン付き
 # ================================================================
 import os
 import csv
@@ -49,9 +49,9 @@ st.set_page_config(
     layout="wide",
 )
 
-# 背景画像を適用＋メインとサイドバーで文字色分離
+# 背景画像を適用＋全体ダークテーマ（文字白・入力欄黒）
 def set_background(image_path: str):
-    """背景画像を敷きつつ、メインとサイドバーで文字色を分ける"""
+    """背景画像を敷きつつ、全体をダークテーマで白文字＆黒入力欄にする"""
     try:
         with open(image_path, "rb") as f:
             data = f.read()
@@ -67,48 +67,43 @@ def set_background(image_path: str):
                 background-attachment: fixed;
             }}
 
-            /* メインコンテンツ領域に少し暗いオーバーレイ（可読性UP） */
-            section.main {{
-                background-color: rgba(0,0,0,0.35);
+            /* 全体にうっすら暗いオーバーレイをかけて、テキストの乗りをよくする */
+            .stApp > div {{
+                background-color: rgba(0,0,0,0.4);
             }}
 
-            /* メイン側：見出し・ラベル・テキストを白寄りに */
-            section.main h1,
-            section.main h2,
-            section.main h3,
-            section.main h4,
-            section.main h5,
-            section.main h6,
-            section.main p,
-            section.main span,
-            section.main label,
-            section.main li {{
+            /* 全テキストを白寄りに統一（メイン＆サイドバー両方） */
+            .stApp, .stApp p, .stApp li, .stApp span,
+            .stApp label, .stApp div, .stApp th, .stApp td {{
                 color: #f5f5f5 !important;
             }}
-
-            /* メイン側：入力欄の中身は黒文字＋薄い白背景 */
-            section.main input,
-            section.main textarea,
-            section.main select {{
-                color: #111111 !important;
-                background-color: #f9f9f9 !important;
+            .stApp h1, .stApp h2, .stApp h3,
+            .stApp h4, .stApp h5, .stApp h6 {{
+                color: #ffffff !important;
             }}
 
-            /* StreamlitのTextInput/TextAreaにも明示しておく */
-            section.main div[data-baseweb="input"] input {{
-                color: #111111 !important;
-            }}
-            section.main textarea {{
-                color: #111111 !important;
+            /* 入力系コンポーネント：黒ベース＆白文字 */
+            .stApp input,
+            .stApp textarea,
+            .stApp select {{
+                color: #f5f5f5 !important;
+                background-color: #222222 !important;
+                border: 1px solid #555555 !important;
             }}
 
-            /* サイドバー：背景はライトグレー、文字は黒に固定 */
-            section[data-testid="stSidebar"] {{
-                background-color: #f5f5f5 !important;
+            /* Streamlit固有のTextInputラッパーにも適用 */
+            .stApp div[data-baseweb="input"] input {{
+                color: #f5f5f5 !important;
+                background-color: #222222 !important;
             }}
-            section[data-testid="stSidebar"] *,
-            section[data-testid="stSidebar"] label {{
-                color: #111111 !important;
+            .stApp textarea {{
+                color: #f5f5f5 !important;
+                background-color: #222222 !important;
+            }}
+
+            /* ボタン文字も白寄りに */
+            .stButton>button {{
+                color: #f5f5f5 !important;
             }}
             </style>
             """,
@@ -817,6 +812,8 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
+
 
 
 
