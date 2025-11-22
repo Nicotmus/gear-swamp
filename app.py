@@ -69,7 +69,7 @@ def set_background(image_path: str):
 
             /* 全体にうっすら暗いオーバーレイをかけて、テキストの乗りをよくする */
             .stApp > div {{
-                background-color: rgba(0,0,0,0.4);
+                background-color: rgba(0,0,0,0.2);
             }}
 
             /* 全テキストを白寄りに統一（メイン＆サイドバー両方） */
@@ -812,6 +812,7 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
 
 
 
