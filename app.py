@@ -5,7 +5,7 @@
 # 掲示板投稿は管理者のみ削除可能
 # 💾 DBバックアップ＆復元（手動）付き
 # 完全ダークテーマ（OSダーク/ライトに依存しない）
-# 入力欄はすべて黒ベース＋白文字
+# 入力欄・セレクト・アップローダ含め全て黒ベース＋白文字
 # 「借りる」後にそのパーツだけ LINE共有ボタン表示
 # ================================================================
 import os
@@ -14,8 +14,9 @@ import sqlite3
 from io import BytesIO, StringIO
 from contextlib import contextmanager
 from datetime import date, timedelta
-from urllib.parse import quote
+
 import base64
+from urllib.parse import quote
 
 import qrcode
 import streamlit as st
@@ -79,8 +80,8 @@ def set_background(image_path: str):
 
             /* 全テキストを白系で統一（メイン＋サイドバー共通） */
             .stApp, .stApp p, .stApp li, .stApp span,
-            .stApp label, .stApp div, .stMarkdown, .stTextInput label,
-            .stCheckbox, .stRadio, .stSelectbox, .stMultiSelect, .stDateInput, .stTextArea {{
+            .stApp label, .stApp div, .stMarkdown,
+            .stTextInput label, .stSelectbox label, .stMultiSelect label {{
                 color: #f5f5f5 !important;
             }}
             .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {{
@@ -100,7 +101,8 @@ def set_background(image_path: str):
                 background-color: #222222 !important;
                 border: 1px solid #555555 !important;
             }}
-            /* BaseWebコンポーネント（TextInput / Select / TextArea） */
+
+            /* BaseWebコンポーネント（TextInput / Select / TextArea / MultiSelect） */
             .stApp div[data-baseweb="input"],
             .stApp div[data-baseweb="select"],
             .stApp div[data-baseweb="textarea"] {{
@@ -108,9 +110,23 @@ def set_background(image_path: str):
                 color: #f5f5f5 !important;
             }}
             .stApp div[data-baseweb="input"] input,
-            .stApp div[data-baseweb="select"] *,
+            .stApp div[data-baseweb="select"] * ,
             .stApp div[data-baseweb="textarea"] textarea {{
                 color: #f5f5f5 !important;
+            }}
+
+            /* select のドロップダウンポップアップも黒ベースに */
+            .stApp div[data-baseweb="popover"] div[data-baseweb="menu"] {{
+                background-color: #222222 !important;
+                color: #f5f5f5 !important;
+            }}
+            .stApp div[data-baseweb="menu"] div[role="option"] {{
+                background-color: #222222 !important;
+                color: #f5f5f5 !important;
+            }}
+            .stApp div[data-baseweb="menu"] div[role="option"][aria-selected="true"] {{
+                background-color: #ff4b4b !important;
+                color: #ffffff !important;
             }}
 
             /* ファイルアップローダーも暗めに */
@@ -119,9 +135,14 @@ def set_background(image_path: str):
                 color: #f5f5f5 !important;
                 border-radius: 0.5rem;
             }}
-            [data-testid="stFileUploader"] div[role="button"] {{
+            [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] {{
+                background-color: #222222 !important;
+                color: #f5f5f5 !important;
+            }}
+            [data-testid="stFileUploader"] button {{
                 background-color: #333333 !important;
                 color: #f5f5f5 !important;
+                border: 1px solid #777777 !important;
             }}
 
             /* ボタン文字も白 */
@@ -129,14 +150,12 @@ def set_background(image_path: str):
                 color: #f5f5f5 !important;
             }}
             </style>
-            """,
-            unsafe_allow_html=True,
-        )
+            """
+        , unsafe_allow_html=True)
     except Exception as e:
         st.write("背景CSSエラー:", e)
 
 set_background("bg_gearswamp.png")
-
 st.markdown("<style>.stButton>button{width:100%;padding:.7rem;font-weight:600}</style>", unsafe_allow_html=True)
 
 # ================================================================
@@ -220,7 +239,6 @@ def init_all_tables():
         """
         )
 
-
 def img_to_blob(img, max_px=1400):
     if not img:
         return None
@@ -230,14 +248,12 @@ def img_to_blob(img, max_px=1400):
     img.save(b, format="JPEG", quality=85, optimize=True)
     return b.getvalue()
 
-
 def blob_to_img(blob, thumb_px=900):
     if not blob:
         return None
     i = Image.open(BytesIO(blob))
     i.thumbnail((thumb_px, thumb_px))
     return i
-
 
 def compute_due(start, days):
     try:
@@ -246,10 +262,7 @@ def compute_due(start, days):
         s = date.today()
     return s + timedelta(days=days)
 
-
-# ================================================================
-# メンバー関連
-# ================================================================
+# メンバー系
 def upsert_member(name, insta=None, activate=False):
     if not name:
         return
@@ -267,14 +280,12 @@ def upsert_member(name, insta=None, activate=False):
                 (name, insta, 1 if activate else 0, str(date.today())),
             )
 
-
 def is_active(user):
     if not user:
         return False
     with get_conn() as c:
         r = c.execute("SELECT is_active FROM members WHERE name=?", (user,)).fetchone()
         return bool(r and r[0] == 1)
-
 
 def get_insta(user):
     if not user:
@@ -283,11 +294,9 @@ def get_insta(user):
         r = c.execute("SELECT insta FROM members WHERE name=?", (user,)).fetchone()
         return r[0] if r and r[0] else None
 
-
 def is_admin(user):
     """管理者かどうか"""
     return bool(user) and user in ADMIN_USERS
-
 
 def rename_member(old_name, new_name):
     if not old_name or not new_name or old_name == new_name:
@@ -300,7 +309,6 @@ def rename_member(old_name, new_name):
         c.execute("UPDATE posts SET author=? WHERE author=?", (new_name, old_name))
     return True
 
-
 def transfer_ownership(frm, to):
     if not frm or not to or frm == to:
         return 0
@@ -308,12 +316,10 @@ def transfer_ownership(frm, to):
         c.execute("UPDATE items SET owner=? WHERE owner=?", (to, frm))
         return c.total_changes
 
-
 def delete_member(member_name):
     with get_conn() as c:
         c.execute("DELETE FROM members WHERE name=?", (member_name,))
         return c.total_changes
-
 
 # 初期化
 init_all_tables()
@@ -426,8 +432,6 @@ with tab_list:
             q += " ORDER BY status DESC, category, name"
             return c.execute(q, p).fetchall()
 
-    last_borrowed_id = st.session_state.get("last_borrowed_item_id")
-
     for i, nm, cat, size, cond, owner, loc, note, status, photo in list_items():
         with st.container(border=True):
             img = blob_to_img(photo)
@@ -441,7 +445,7 @@ with tab_list:
                 st.caption(f"保管場所: {loc or '-'}")
                 st.write(note or "備考なし")
 
-            # このパーツのLINE共有用テキスト（在庫/貸出共通）
+            # このパーツのLINE共有用テキスト
             item_share_text = (
                 f"[Gear Swamp]\n"
                 f"パーツ: {nm}\n"
@@ -736,7 +740,7 @@ with tab_bbs:
 
 
 # ================================================================
-# バックアップタブ
+# 💾 バックアップタブ（DB丸ごとバックアップ＆復元）
 # ================================================================
 with tab_backup:
     st.subheader("💾 DBバックアップ & 復元")
@@ -765,8 +769,7 @@ with tab_backup:
     st.markdown("### 2) バックアップから復元")
 
     st.caption(
-        "⚠️ **注意**：復元すると現在のDBは上書きされます。"
-        "元に戻せるように、先にバックアップのダウンロードを推奨します。"
+        "⚠️ **注意**：復元すると現在のDBは上書きされます。元に戻せるように、先にバックアップのダウンロードを推奨します。"
     )
 
     up_db = st.file_uploader("復元用バックアップファイル（.db）を選択", type=["db"])
@@ -779,6 +782,8 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
+
 
 
 
