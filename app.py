@@ -1,5 +1,7 @@
 # ================================================================
 # app.py --- Gear Swamp（完全版）
+# 招待制 / Admin管理 / 在庫・貸出・予約 / 掲示板 / CSV / 写真 /
+# カテゴリ・所有者・状態フィルタ / 自分の名前変更 / 返却目安90日
 # ================================================================
 import os
 import csv
@@ -26,6 +28,7 @@ ADMIN_USERS = set(st.secrets.get("admin_users", []))  # 例: ["TETSUYA"]
 
 
 def notify_line(msg: str) -> bool:
+    """将来LINE通知に差し替える用ダミー"""
     return False
 
 
@@ -67,7 +70,7 @@ def set_background(image_path: str):
                 background-size: cover;
             }}
             .stApp > div {{
-                background-color: rgba(0,0,0,0.10);
+                background-color: rgba(0,0,0,0.40);
             }}
 
             .stApp, .stApp p, .stApp li, .stApp span,
@@ -91,6 +94,12 @@ def set_background(image_path: str):
             .stApp [data-baseweb="tab-list"] {{
                 gap: 0.4rem;
                 padding-bottom: 0.4rem;
+
+                /* タブバーをスクロール固定 */
+                position: sticky;
+                top: 0;
+                z-index: 999;
+                background-color: rgba(0,0,0,0.9);
             }}
 
             .stApp button[role="tab"] {{
@@ -200,10 +209,11 @@ def set_background(image_path: str):
                 padding-right: 0.25rem !important;
             }}
 
-            /* ===== 在庫タブの「border=True コンテナ」だけ黒カード化 =====
-               → 他タブは border=True を使わないようにしておく
+            /* ★ 在庫タブの「border=True コンテナ」だけ黒カード化 ★
+               → st.container(border=True) のラッパーに効く
             */
-            .stApp div[data-testid="stVerticalBlockBorderWrapper"] {{
+            .stApp div[data-testid="stVerticalBlockBorderWrapper"],
+            .stApp div[class*="stVerticalBlockBorderWrapper"] {{
                 background-color: rgba(0,0,0,0.78) !important;
                 border-radius: 10px !important;
                 padding: 0.8rem 1rem 0.8rem !important;
@@ -212,7 +222,7 @@ def set_background(image_path: str):
                 box-shadow: 0 2px 6px rgba(0,0,0,0.45) !important;
             }}
 
-            /* 掲示板本文だけ一段濃い箱にする（border=True は使わない） */
+            /* 掲示板本文だけ一段濃い箱にする（border=False コンテナ内の div） */
             .bbs-card {{
                 background-color: rgba(0,0,0,0.85);
                 border-radius: 10px;
@@ -561,6 +571,7 @@ with tab_list:
             return c.execute(q, p).fetchall()
 
     for i, nm, cat, size, cond, owner, loc, note, status, photo in list_items():
+        # ★ ここだけ border=True → 黒カードが効く
         with st.container(border=True):
             img = blob_to_img(photo)
             if img:
@@ -783,7 +794,7 @@ with tab_bbs:
         st.caption("まだ投稿がありません。")
     else:
         for pid, author, ptype, cat, title, body, created in posts:
-            # 掲示板は border=False の素のコンテナ → 黒カード CSS の対象外
+            # 掲示板側は border=False の素のコンテナ → 背景は元のまま
             with st.container():
                 title_html = html.escape(title or "")
                 meta = f"{created} / 投稿者: {author}"
@@ -1044,11 +1055,3 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
-
-
-
-
-
-
-
-
