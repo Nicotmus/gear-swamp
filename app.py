@@ -55,122 +55,109 @@ st.set_page_config(
 # テーマ＆背景（完全ダーク固定）
 # ================================================================
 def set_background(image_path: str):
- """背景画像を敷きつつ、完全ダークテーマで統一（OSテーマに依存しない）"""
- try:
- with open(image_path, "rb") as f:
- data = f.read()
- encoded = base64.b64encode(data).decode("utf-8")
- st.markdown(
- f"""
- <style>
- /* OS設定に関係なく常に黒背景＋白文字ベースにする */
- html, body {{
- background-color: #000000 !important;
- color: #f5f5f5 !important;
- }}
+    """背景画像を敷きつつ、完全ダークテーマで統一（OSテーマに依存しない）"""
+    try:
+        with open(image_path, "rb") as f:
+            data = f.read()
+        encoded = base64.b64encode(data).decode("utf-8")
 
- /* アプリ本体に背景画像＋薄いオーバーレイ */
- .stApp {{
- background: url("data:image/png;base64,{encoded}") no-repeat center center fixed;
- background-size: cover;
- }}
- .stApp > div {{
- background-color: rgba(0,0,0,0.40);
- }}
+        st.markdown(
+            f"""
+            <style>
+            html, body {{
+                background-color: #000000 !important;
+                color: #f5f5f5 !important;
+            }}
 
- /* 全テキストを白系で統一（メイン＋サイドバー共通） */
- .stApp, .stApp p, .stApp li, .stApp span,
- .stApp label, .stApp div, .stMarkdown,
- .stTextInput label, .stSelectbox label, .stMultiSelect label {{
- color: #f5f5f5 !important;
- }}
- .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {{
- color: #ffffff !important;
- }}
+            .stApp {{
+                background: url("data:image/png;base64,{encoded}") no-repeat center center fixed;
+                background-size: cover;
+            }}
+            .stApp > div {{
+                background-color: rgba(0,0,0,0.40);
+            }}
 
- /* サイドバー背景も暗く */
- section[data-testid="stSidebar"] {{
- background-color: #111111 !important;
- }}
+            .stApp, .stApp p, .stApp li, .stApp span,
+            .stApp label, .stApp div, .stMarkdown,
+            .stTextInput label, .stSelectbox label, .stMultiSelect label {{
+                color: #f5f5f5 !important;
+            }}
 
- /* ===== 入力系コンポーネント全体を黒ベース＋白文字に統一 ===== */
+            .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {{
+                color: #ffffff !important;
+            }}
 
- /* 素の input / textarea / select */
- .stApp input,
- .stApp textarea,
- .stApp select {{
- color: #f5f5f5 !important;
- background-color: #222222 !important;
- border: 1px solid #555555 !important;
- }}
+            section[data-testid="stSidebar"] {{
+                background-color: #111111 !important;
+            }}
 
- /* BaseWebコンポーネント（TextInput / Select / TextArea） */
- .stApp div[data-baseweb="input"],
- .stApp div[data-baseweb="select"],
- .stApp div[data-baseweb="textarea"] {{
- background-color: #222222 !important;
- color: #f5f5f5 !important;
- }}
- .stApp div[data-baseweb="input"] input,
- .stApp div[data-baseweb="select"] * ,
- .stApp div[data-baseweb="textarea"] textarea {{
- color: #f5f5f5 !important;
- }}
+            .stApp input,
+            .stApp textarea,
+            .stApp select {{
+                color: #f5f5f5 !important;
+                background-color: #222222 !important;
+                border: 1px solid #555555 !important;
+            }}
 
- /* selectbox / multiselect の見えている箱 (role="combobox") も黒くする */
- .stApp div[role="combobox"] {{
- background-color: #222222 !important;
- color: #f5f5f5 !important;
- border: 1px solid #555555 !important;
- }}
+            .stApp div[data-baseweb="input"],
+            .stApp div[data-baseweb="select"],
+            .stApp div[data-baseweb="textarea"] {{
+                background-color: #222222 !important;
+                color: #f5f5f5 !important;
+            }}
+            .stApp div[data-baseweb="input"] input,
+            .stApp div[data-baseweb="select"] *,
+            .stApp div[data-baseweb="textarea"] textarea {{
+                color: #f5f5f5 !important;
+            }}
 
- /* ドロップダウンの選択肢 */
- .stApp div[data-baseweb="popover"] div[data-baseweb="menu"] {{
- background-color: #222222 !important;
- color: #f5f5f5 !important;
- }}
- .stApp div[data-baseweb="menu"] div[role="option"] {{
- background-color: #222222 !important;
- color: #f5f5f5 !important;
- }}
- .stApp div[data-baseweb="menu"] div[role="option"][aria-selected="true"] {{
- background-color: #ff4b4b !important;
- color: #ffffff !important;
- }}
+            .stApp div[role="combobox"] {{
+                background-color: #222222 !important;
+                color: #f5f5f5 !important;
+                border: 1px solid #555555 !important;
+            }}
 
- /* MultiSelect の選択済みチップは赤系のまま（見やすい） */
+            .stApp div[data-baseweb="popover"] div[data-baseweb="menu"] {{
+                background-color: #222222 !important;
+                color: #f5f5f5 !important;
+            }}
+            .stApp div[data-baseweb="menu"] div[role="option"] {{
+                background-color: #222222 !important;
+                color: #f5f5f5 !important;
+            }}
+            .stApp div[data-baseweb="menu"] div[role="option"][aria-selected="true"] {{
+                background-color: #ff4b4b !important;
+                color: #ffffff !important;
+            }}
 
- /* ファイルアップローダーも暗めに＋ボタンも黒 */
- [data-testid="stFileUploader"] > section,
- [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] {{
- background-color: #222222 !important;
- color: #f5f5f5 !important;
- }}
- [data-testid="stFileUploader"] button {{
- background-color: #333333 !important;
- color: #f5f5f5 !important;
- border: 1px solid #777777 !important;
- }}
+            [data-testid="stFileUploader"] > section,
+            [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] {{
+                background-color: #222222 !important;
+                color: #f5f5f5 !important;
+            }}
+            [data-testid="stFileUploader"] button {{
+                background-color: #333333 !important;
+                color: #f5f5f5 !important;
+                border: 1px solid #777777 !important;
+            }}
 
- /* ===== ボタン系も全部黒ベース＋白文字に統一 ===== */
+            .stApp button {{
+                background-color: #333333 !important;
+                color: #f5f5f5 !important;
+                border: 1px solid #777777 !important;
+            }}
+            .stApp button[disabled] {{
+                background-color: #444444 !important;
+                color: #bbbbbb !important;
+                border: 1px solid #777777 !important;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+    except Exception as e:
+        st.write("背景CSSエラー:", e)
 
- .stApp button {{
- background-color: #333333 !important;
- color: #f5f5f5 !important;
- border: 1px solid #777777 !important;
- }}
- .stApp button[disabled] {{
- background-color: #444444 !important;
- color: #bbbbbb !important;
- border: 1px solid #777777 !important;
- }}
-
- </style>
- """,
- unsafe_allow_html=True,
- )
- except Exception as e:
- st.write("背景CSSエラー:", e)
 
 set_background("bg_gearswamp.png")
 st.markdown("<style>.stButton>button{width:100%;padding:.7rem;font-weight:600}</style>", unsafe_allow_html=True)
@@ -873,6 +860,7 @@ with tab_backup:
  st.rerun()
  except Exception as e:
  st.error(f"復元中にエラーが発生しました: {e}")
+
 
 
 
