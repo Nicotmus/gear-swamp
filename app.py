@@ -1,14 +1,6 @@
 # ================================================================
 # app.py --- Gear Swamp（完全版）
-# 招待制 / Admin管理 / 在庫・貸出・予約 / 掲示板 / CSV / 写真 /
-# カテゴリ・所有者・状態フィルタ / 自分の名前変更 / 返却目安90日
-# 掲示板投稿は管理者のみ削除可能
-# DBバックアップ＆復元（手動）付き
-# 完全ダークテーマ（OS設定に依存しない）
-# 入力欄・select・ボタン・アップローダを黒ベース＋白文字に統一
-# 「借りる」後にそのパーツだけ LINE共有ボタン表示
-# 在庫登録タブの「カテゴリ」と「状態」はマルチセレクト赤チップ表示
-# 掲示板・在庫一覧ともに黒カード風で表示
+# （説明は省略：機能は今までと同じ）
 # ================================================================
 import os
 import csv
@@ -35,7 +27,6 @@ ADMIN_USERS = set(st.secrets.get("admin_users", []))  # 例: ["TETSUYA"]
 
 
 def notify_line(msg: str) -> bool:
-    """将来Messaging APIに差し替える用のダミー"""
     return False
 
 
@@ -56,10 +47,9 @@ st.set_page_config(
 )
 
 # ================================================================
-# テーマ＆背景（完全ダーク固定）
+# テーマ＆背景
 # ================================================================
 def set_background(image_path: str):
-    """背景画像＋ダークテーマ＋タブデザイン＋入力欄の黒統一"""
     try:
         with open(image_path, "rb") as f:
             data = f.read()
@@ -68,7 +58,6 @@ def set_background(image_path: str):
         st.markdown(
             f"""
             <style>
-            /* ベース：常に黒背景＋白文字 */
             html, body {{
                 background-color: #000000 !important;
                 color: #f5f5f5 !important;
@@ -79,7 +68,7 @@ def set_background(image_path: str):
                 background-size: cover;
             }}
             .stApp > div {{
-                background-color: rgba(0,0,0,0.10);
+                background-color: rgba(0,0,0,0.40);
             }}
 
             .stApp, .stApp p, .stApp li, .stApp span,
@@ -91,7 +80,6 @@ def set_background(image_path: str):
                 color: #ffffff !important;
             }}
 
-            /* caption も白寄りに */
             .stApp .stCaption, .stApp [data-testid="stCaption"] {{
                 color: #f5f5f5 !important;
             }}
@@ -100,9 +88,7 @@ def set_background(image_path: str):
                 background-color: #111111 !important;
             }}
 
-            /* =========================
-               タブデザイン（角丸＋強調）
-               ========================= */
+            /* ===== タブ ===== */
             .stApp [data-baseweb="tab-list"] {{
                 gap: 0.4rem;
                 padding-bottom: 0.4rem;
@@ -129,9 +115,7 @@ def set_background(image_path: str):
                 filter: brightness(1.05);
             }}
 
-            /* =========================
-               入力系コンポーネントを黒ベース化
-               ========================= */
+            /* ===== 入力コンポーネント ===== */
             .stApp input,
             .stApp textarea,
             .stApp select {{
@@ -182,7 +166,6 @@ def set_background(image_path: str):
                 color: #ffffff !important;
             }}
 
-            /* ファイルアップローダー */
             [data-testid="stFileUploader"] > section,
             [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] {{
                 background-color: #222222 !important;
@@ -195,7 +178,6 @@ def set_background(image_path: str):
                 border: 1px solid #777777 !important;
             }}
 
-            /* ボタン全般 */
             .stApp button {{
                 background-color: #333333 !important;
                 color: #f5f5f5 !important;
@@ -208,20 +190,20 @@ def set_background(image_path: str):
                 border: 1px solid #777777 !important;
             }}
 
-            /* =========================
-               border=True コンテナを黒カード化
-               （在庫1件分・掲示板1件分など）
-               ========================= */
-            .stApp div[class*="stVerticalBlockBorderWrapper"] {{
+            /* ===== 縦ブロック全体を黒パネル化 =====
+               data-testid="stVerticalBlock" は
+               在庫1件分・掲示板1件分などの親ブロックに付くので、
+               ここを強制で黒背景カードにする。
+            */
+            .stApp div[data-testid="stVerticalBlock"] {{
                 background-color: rgba(0,0,0,0.78) !important;
                 border-radius: 10px !important;
-                padding: 0.8rem 1rem 0.6rem !important;
+                padding: 0.8rem 1rem 0.8rem !important;
                 margin-bottom: 0.8rem !important;
-                border: 1px solid #333333 !important;
                 box-shadow: 0 2px 6px rgba(0,0,0,0.45) !important;
             }}
 
-            /* 掲示板の中身カード（さらに一段暗く） */
+            /* 掲示板本文だけ一段濃い箱にする */
             .bbs-card {{
                 background-color: rgba(0,0,0,0.85);
                 border-radius: 10px;
@@ -408,7 +390,6 @@ def get_insta(user):
 
 
 def is_admin(user):
-    """管理者かどうか"""
     return bool(user) and user in ADMIN_USERS
 
 
@@ -418,9 +399,7 @@ def rename_member(old_name, new_name):
     with get_conn() as c:
         c.execute("UPDATE members SET name=? WHERE name=?", (new_name, old_name))
         c.execute("UPDATE items SET owner=? WHERE owner=?", (new_name, old_name))
-        c.execute(
-            "UPDATE loans SET borrower=? WHERE borrower=?", (new_name, old_name)
-        )
+        c.execute("UPDATE loans SET borrower=? WHERE borrower=?", (new_name, old_name))
         c.execute(
             "UPDATE reservations SET reserver=? WHERE reserver=?",
             (new_name, old_name),
@@ -443,11 +422,10 @@ def delete_member(member_name):
         return c.total_changes
 
 
-# 初期化
 init_all_tables()
 
 # ================================================================
-# サイドバー：認証
+# サイドバー
 # ================================================================
 with st.sidebar:
     st.subheader("メンバー認証")
@@ -486,7 +464,7 @@ with st.sidebar:
         st.image(qr, caption="このQRを仲間に配布", use_column_width=True)
 
 # ================================================================
-# タブ構成
+# タブ
 # ================================================================
 tab_inv, tab_list, tab_bbs, tab_logs, tab_mem, tab_csv, tab_backup = st.tabs(
     [" 在庫登録", " 在庫/貸出/予約", " 掲示板", " 履歴", " メンバー", " CSV", " バックアップ"]
@@ -501,7 +479,6 @@ with tab_inv:
 
     with c1:
         name = st.text_input("パーツ名")
-
         cat_sel = st.multiselect(
             "カテゴリ（1件選択）",
             CATEGORIES,
@@ -509,9 +486,7 @@ with tab_inv:
             max_selections=1,
         )
         cat = cat_sel[0] if cat_sel else ""
-
         size = st.text_input("サイズ")
-
         cond_sel = st.multiselect(
             "状態（1件選択）",
             ["新品", "美品", "使用感あり", "要整備"],
@@ -551,9 +526,7 @@ with tab_list:
     kw = st.text_input("キーワード検索", "")
     f_cat = st.multiselect("カテゴリ絞り込み", CATEGORIES)
     f_owner = st.text_input("所有者で絞る", "")
-    f_status = st.multiselect(
-        "状態で絞る", ["在庫あり", "貸出中", "整備中", "アーカイブ"]
-    )
+    f_status = st.multiselect("状態で絞る", ["在庫あり", "貸出中", "整備中", "アーカイブ"])
     show_arch = st.checkbox("アーカイブも表示", value=False)
 
     def list_items():
@@ -583,7 +556,6 @@ with tab_list:
             return c.execute(q, p).fetchall()
 
     for i, nm, cat, size, cond, owner, loc, note, status, photo in list_items():
-        # ここが1パーツ分の黒カードになる
         with st.container(border=True):
             img = blob_to_img(photo)
             if img:
@@ -598,8 +570,7 @@ with tab_list:
                 st.caption(f"保管場所: {loc or '-'}")
                 st.write(note or "備考なし")
 
-            # LINE共有用テキスト
-            item_share_text = (
+            share_text_item = (
                 f"[Gear Swamp]\n"
                 f"パーツ: {nm}\n"
                 f"カテゴリ: {cat}\n"
@@ -609,11 +580,10 @@ with tab_list:
                 f"保管場所: {loc or '-'}\n"
                 f"備考: {note or '-'}"
             )
-            line_url = f"https://line.me/R/msg/text/?{quote(item_share_text)}"
+            line_url_item = f"https://line.me/R/msg/text/?{quote(share_text_item)}"
 
             col1, col2, col3, col4 = st.columns(4)
 
-            # 借りる（返却目安 90日）
             if (
                 col1.button(" 借りる", key=f"b{i}")
                 and login
@@ -631,15 +601,10 @@ with tab_list:
                         """,
                         (i, member, str(today), str(due), 90, "貸出中"),
                     )
-                    conn.execute(
-                        "UPDATE items SET status='貸出中' WHERE id=?", (i,)
-                    )
+                    conn.execute("UPDATE items SET status='貸出中' WHERE id=?", (i,))
                 st.session_state["last_borrowed_item_id"] = i
-                st.success(
-                    "借用登録しました（返却目安90日）。このパーツをLINEで共有できます "
-                )
+                st.success("借用登録しました（返却目安90日）。このパーツをLINEで共有できます ")
 
-            # 返却
             if (
                 col2.button(" 返却", key=f"r{i}")
                 and login
@@ -671,7 +636,6 @@ with tab_list:
                 st.success("返却しました（在庫ありに戻しました）")
                 st.rerun()
 
-            # 予約
             if col3.button(" 予約", key=f"s{i}") and login and is_active(member):
                 with get_conn() as conn:
                     pos = conn.execute(
@@ -695,7 +659,6 @@ with tab_list:
                     else:
                         st.warning("予約枠がいっぱいです")
 
-            # 状態変更
             new_st = col4.selectbox(
                 "状態変更",
                 ["変更しない", "在庫あり", "貸出中", "整備中", "アーカイブ"],
@@ -708,24 +671,18 @@ with tab_list:
                 and new_st != "変更しない"
             ):
                 with get_conn() as conn:
-                    conn.execute(
-                        "UPDATE items SET status=? WHERE id=?", (new_st, i)
-                    )
+                    conn.execute("UPDATE items SET status=? WHERE id=?", (new_st, i))
                 st.success("状態を更新しました")
                 st.rerun()
 
-            # 最後に借りたパーツだけLINE共有ボタン表示
             if st.session_state.get("last_borrowed_item_id") == i:
-                st.markdown(f"[ この貸出をLINEで共有]({line_url})")
+                st.markdown(f"[ この貸出をLINEで共有]({line_url_item})")
 
             st.divider()
             ax, ay, az = st.columns(3)
-
             if ax.button(" アーカイブ", key=f"arc{i}") and login and is_active(member):
                 with get_conn() as conn:
-                    conn.execute(
-                        "UPDATE items SET status='アーカイブ' WHERE id=?", (i,)
-                    )
+                    conn.execute("UPDATE items SET status='アーカイブ' WHERE id=?", (i,))
                 st.rerun()
 
             confirm_del = ay.checkbox("削除確認", key=f"cf{i}")
@@ -746,7 +703,6 @@ with tab_list:
 with tab_bbs:
     st.subheader(" 掲示板（試乗・貸し借り・雑談）")
 
-    # 新規投稿
     st.markdown("### 新規投稿")
     if login and is_active(member):
         ptype = st.selectbox("種別", POST_TYPES)
@@ -778,7 +734,6 @@ with tab_bbs:
     else:
         st.caption("※ 投稿には認証が必要です。")
 
-    # 投稿一覧
     st.markdown("### 投稿一覧")
 
     kw_b = st.text_input("キーワード検索（掲示板）", "")
@@ -890,9 +845,7 @@ with tab_mem:
                 ok = rename_member(member, new_my_name)
                 if ok:
                     st.success(f"{member} → {new_my_name} に変更しました。")
-                    st.info(
-                        "※ 次回からサイドバーの『あなたの名前』も新しい名前でログインしてください。"
-                    )
+                    st.info("※ 次回からサイドバーの『あなたの名前』も新しい名前でログインしてください。")
                 else:
                     st.error("名前の変更に失敗しました。")
     else:
@@ -919,7 +872,6 @@ with tab_mem:
 
         col1, col2 = st.columns(2)
 
-        # 1) メンバー編集
         with col1:
             st.markdown("### 1) メンバー編集")
             sel = st.selectbox("対象メンバー", names, index=0)
@@ -948,7 +900,6 @@ with tab_mem:
                     st.success("更新しました。")
                     st.rerun()
 
-        # 2) 所有アイテム移管 & 3) 削除
         with col2:
             st.markdown("### 2) 所有アイテムの移管")
             from_m = st.selectbox("移管元", names, index=0, key="admin_from")
@@ -977,13 +928,11 @@ with tab_mem:
                     st.error("確認用の名前が一致しません。")
                 else:
                     deleted = delete_member(del_m)
-                    st.success(
-                        f"{del_m} を削除しました（削除件数: {deleted}）。"
-                    )
+                    st.success(f"{del_m} を削除しました（削除件数: {deleted}）。")
                     st.rerun()
 
 # ================================================================
-# CSVタブ（在庫のみ）
+# CSVタブ
 # ================================================================
 with tab_csv:
     st.subheader("CSV一括登録（在庫）")
@@ -994,26 +943,10 @@ with tab_csv:
         ["name", "category", "size", "condition", "owner", "location", "note"]
     )
     w.writerow(
-        [
-            "700C Front Wheel",
-            "ホイール",
-            "700C/100x12",
-            "美品",
-            "TETSUYA",
-            "自宅A",
-            "ハブDT350",
-        ]
+        ["700C Front Wheel", "ホイール", "700C/100x12", "美品", "TETSUYA", "自宅A", "ハブDT350"]
     )
     w.writerow(
-        [
-            "11s Cassette 11-28",
-            "スプロケット/コグ",
-            "HG 11s",
-            "使用感あり",
-            "TETSUYA",
-            "自宅B",
-            "軽微摩耗",
-        ]
+        ["11s Cassette 11-28", "スプロケット/コグ", "HG 11s", "使用感あり", "TETSUYA", "自宅B", "軽微摩耗"]
     )
     st.download_button(
         "テンプレCSVをダウンロード",
@@ -1050,7 +983,7 @@ with tab_csv:
         st.success(f"{count} 件 登録しました。")
 
 # ================================================================
-# バックアップタブ（DB丸ごとバックアップ＆復元）
+# バックアップタブ
 # ================================================================
 with tab_backup:
     st.subheader(" DBバックアップ & 復元")
@@ -1095,6 +1028,8 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
+
 
 
 
