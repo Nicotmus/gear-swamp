@@ -1,6 +1,7 @@
 # ================================================================
-# app.py --- Gear Swamp（完全版）
-# 招待制 / Admin管理 / 在庫・貸出・予約 / 掲示板 / CSV / 写真 など一式
+# app.py --- Gear Swamp（完成安定版）
+# 招待制 / Admin管理 / 在庫・貸出・予約 / 掲示板 / CSV / 写真 /
+# カテゴリ・所有者・状態フィルタ / 自分の名前変更 / 返却目安90日
 # ================================================================
 import os
 import csv
@@ -48,7 +49,7 @@ st.set_page_config(
 )
 
 # ================================================================
-# テーマ＆背景
+# テーマ＆背景（ダーク固定＋入力欄黒化）
 # ================================================================
 def set_background(image_path: str):
     try:
@@ -89,17 +90,10 @@ def set_background(image_path: str):
                 background-color: #111111 !important;
             }}
 
-                        /* ===== タブ ===== */
-            /* タブ全体の黒い帯を消す */
-            .stApp [data-baseweb="tabs"] {{
-                background-color: transparent !important;
-                box-shadow: none !important;
-            }}
-
+            /* ===== タブの見た目（固定はしない） ===== */
             .stApp [data-baseweb="tab-list"] {{
                 gap: 0.4rem;
-                padding: 0.4rem 0;
-                background-color: transparent !important;
+                padding-bottom: 0.4rem;
             }}
 
             .stApp button[role="tab"] {{
@@ -122,7 +116,6 @@ def set_background(image_path: str):
             .stApp button[role="tab"]:hover {{
                 filter: brightness(1.05);
             }}
-
 
             /* ===== 入力コンポーネント ===== */
             .stApp input,
@@ -204,25 +197,13 @@ def set_background(image_path: str):
                 border: 1px solid #777777 !important;
             }}
 
-            /* 列間の余白をちょい詰めてスマホ向けに */
+            /* 列の左右余白を少し詰める（スマホ用） */
             .stApp [data-testid="column"] {{
                 padding-left: 0.25rem !important;
                 padding-right: 0.25rem !important;
             }}
 
-            /* ★ 在庫カードだけ黒くする（マーカーを持つ縦ブロックのみ） ★
-               :has() で「gs-item-card-marker を持つ stVerticalBlock」をターゲット。
-            */
-            .stApp div[data-testid="stVerticalBlock"]:has(.gs-item-card-marker) {{
-                background-color: rgba(0,0,0,0.78) !important;
-                border-radius: 10px !important;
-                padding: 0.8rem 1rem 0.8rem !important;
-                margin-bottom: 0.8rem !important;
-                box-shadow: 0 2px 6px rgba(0,0,0,0.45) !important;
-                border: 1px solid #333333 !important;
-            }}
-
-            /* 掲示板本文だけ一段濃い箱にする（border=False コンテナ内の div） */
+            /* 掲示板本文だけ一段濃い箱にする */
             .bbs-card {{
                 background-color: rgba(0,0,0,0.85);
                 border-radius: 10px;
@@ -571,12 +552,8 @@ with tab_list:
             return c.execute(q, p).fetchall()
 
     for i, nm, cat, size, cond, owner, loc, note, status, photo in list_items():
-        # ★ マーカーを置いた縦ブロックだけ CSS で黒カードにする
-        with st.container():
-            st.markdown(
-                '<div class="gs-item-card-marker"></div>', unsafe_allow_html=True
-            )
-
+        # 1部品あたりの枠：border=True（白枠）だけにして背景色はいじらない
+        with st.container(border=True):
             img = blob_to_img(photo)
             if img:
                 st.image(img, use_column_width=True)
@@ -798,7 +775,6 @@ with tab_bbs:
         st.caption("まだ投稿がありません。")
     else:
         for pid, author, ptype, cat, title, body, created in posts:
-            # 掲示板は border=False の普通のコンテナ → 背景は元のまま
             with st.container():
                 title_html = html.escape(title or "")
                 meta = f"{created} / 投稿者: {author}"
@@ -911,7 +887,7 @@ with tab_mem:
                 value=sel if sel != "(なし)" else "",
                 key="admin_rename",
             )
-            new_insta = st.text_input(
+            new_insta = st.text入力(
                 "Instagram（@不要）",
                 value=get_insta(sel) or "",
                 key="admin_insta",
@@ -1059,6 +1035,8 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
+
 
 
 
