@@ -8,7 +8,7 @@
 # 入力欄・select・ボタン・アップローダを黒ベース＋白文字に統一
 # 「借りる」後にそのパーツだけ LINE共有ボタン表示
 # 在庫登録タブの「カテゴリ」と「状態」はマルチセレクト赤チップ表示
-# 掲示板・在庫一覧ともに黒カード風コンテナ上に表示
+# 掲示板・在庫一覧ともに黒カード風で表示
 # ================================================================
 import os
 import csv
@@ -209,14 +209,15 @@ def set_background(image_path: str):
             }}
 
             /* =========================
-               コンテナを黒カード風に
-               在庫一覧の1件分・掲示板の1件分などが対象
+               「border=True」のコンテナを黒カード風に
+               在庫一覧・（必要なら）他でも使える
                ========================= */
-            .stApp div[data-testid="stContainer"] {{
+            .stApp div[data-testid="stVerticalBlockBorderWrapper"] {{
                 background-color: rgba(0,0,0,0.78);
                 border-radius: 10px;
                 padding: 0.8rem 1rem 0.6rem;
-                margin-bottom: 0.7rem;
+                margin-bottom: 0.8rem;
+                border: 1px solid #333333;
                 box-shadow: 0 2px 6px rgba(0,0,0,0.45);
             }}
 
@@ -582,7 +583,8 @@ with tab_list:
             return c.execute(q, p).fetchall()
 
     for i, nm, cat, size, cond, owner, loc, note, status, photo in list_items():
-        with st.container():
+        # ここが1パーツ分の黒カードになる
+        with st.container(border=True):
             img = blob_to_img(photo)
             if img:
                 st.image(img, use_column_width=True)
@@ -811,44 +813,46 @@ with tab_bbs:
         st.caption("まだ投稿がありません。")
     else:
         for pid, author, ptype, cat, title, body, created in posts:
-            with st.container():
-                title_html = html.escape(title or "")
-                meta = f"{created} / 投稿者: {author}"
-                if cat:
-                    meta += f" / カテゴリ: {cat}"
-                meta_html = html.escape(meta)
-                body_html = html.escape(body or "").replace("\n", "<br>")
+            with get_conn() as _:
+                with st.container(border=True):
+                # ↑ 掲示板1件も border=True コンテナにのせて黒カード化
+                    title_html = html.escape(title or "")
+                    meta = f"{created} / 投稿者: {author}"
+                    if cat:
+                        meta += f" / カテゴリ: {cat}"
+                    meta_html = html.escape(meta)
+                    body_html = html.escape(body or "").replace("\n", "<br>")
 
-                st.markdown(
-                    f"""
-                    <div class="bbs-card">
-                      <div class="bbs-title">[{html.escape(ptype)}] {title_html}</div>
-                      <div class="bbs-meta">{meta_html}</div>
-                      <div class="bbs-body">{body_html}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                    st.markdown(
+                        f"""
+                        <div class="bbs-card">
+                          <div class="bbs-title">[{html.escape(ptype)}] {title_html}</div>
+                          <div class="bbs-meta">{meta_html}</div>
+                          <div class="bbs-body">{body_html}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
-                insta_user = get_insta(author)
-                colx, coly, colz = st.columns(3)
+                    insta_user = get_insta(author)
+                    colx, coly, colz = st.columns(3)
 
-                if insta_user:
-                    insta_url = f"https://instagram.com/{insta_user}"
-                    colx.markdown(f"[ @{insta_user} へDM](<{insta_url}>)")
+                    if insta_user:
+                        insta_url = f"https://instagram.com/{insta_user}"
+                        colx.markdown(f"[ @{insta_user} へDM](<{insta_url}>)")
 
-                share_text = (
-                    f"[Gear Swamp掲示板]\n[{ptype}] {title}\n{body}\nfrom {author}"
-                )
-                line_url = f"https://line.me/R/msg/text/?{quote(share_text)}"
-                coly.markdown(f"[ LINEで共有]({line_url})")
+                    share_text = (
+                        f"[Gear Swamp掲示板]\n[{ptype}] {title}\n{body}\nfrom {author}"
+                    )
+                    line_url = f"https://line.me/R/msg/text/?{quote(share_text)}"
+                    coly.markdown(f"[ LINEで共有]({line_url})")
 
-                if is_admin(member):
-                    if colz.button(" 投稿削除", key=f"del_post_{pid}"):
-                        with get_conn() as c2:
-                            c2.execute("DELETE FROM posts WHERE id=?", (pid,))
-                        st.success("投稿を削除しました。")
-                        st.rerun()
+                    if is_admin(member):
+                        if colz.button(" 投稿削除", key=f"del_post_{pid}"):
+                            with get_conn() as c2:
+                                c2.execute("DELETE FROM posts WHERE id=?", (pid,))
+                            st.success("投稿を削除しました。")
+                            st.rerun()
 
 # ================================================================
 # 履歴タブ
@@ -1093,4 +1097,5 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
 
