@@ -8,10 +8,12 @@
 # 入力欄・select・ボタン・アップローダを黒ベース＋白文字に統一
 # 「借りる」後にそのパーツだけ LINE共有ボタン表示
 # 在庫登録タブの「カテゴリ」と「状態」はマルチセレクト赤チップ表示
+# 掲示板投稿は黒カード上に表示
 # ================================================================
 import os
 import csv
 import sqlite3
+import html
 from io import BytesIO, StringIO
 from contextlib import contextmanager
 from datetime import date, timedelta
@@ -77,7 +79,7 @@ def set_background(image_path: str):
                 background-size: cover;
             }}
             .stApp > div {{
-                background-color: rgba(0,0,0,0.40);
+                background-color: rgba(0,0,0,0.20);
             }}
 
             .stApp, .stApp p, .stApp li, .stApp span,
@@ -87,6 +89,11 @@ def set_background(image_path: str):
             }}
             .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {{
                 color: #ffffff !important;
+            }}
+
+            /* caption もグレーではなく白寄りに */
+            .stApp .stCaption, .stApp [data-testid="stCaption"] {{
+                color: #f5f5f5 !important;
             }}
 
             section[data-testid="stSidebar"] {{
@@ -124,10 +131,8 @@ def set_background(image_path: str):
 
             /* =========================
                入力系コンポーネントを黒ベース化
-               （ライトモードでも白地×白文字にならないよう強制）
                ========================= */
 
-            /* 素の input / textarea / select */
             .stApp input,
             .stApp textarea,
             .stApp select {{
@@ -136,7 +141,6 @@ def set_background(image_path: str):
                 border: 1px solid #555555 !important;
             }}
 
-            /* BaseWeb ラッパー */
             .stApp div[data-baseweb="input"],
             .stApp div[data-baseweb="select"],
             .stApp div[data-baseweb="textarea"] {{
@@ -146,7 +150,6 @@ def set_background(image_path: str):
                 border: 1px solid #555555 !important;
             }}
 
-            /* 実際の入力部分（ここを押さえておくと白ボックスに白文字問題を潰せる） */
             .stApp div[data-baseweb="input"] input,
             .stApp div[data-baseweb="textarea"] textarea,
             .stApp div[data-baseweb="select"] div,
@@ -155,13 +158,11 @@ def set_background(image_path: str):
                 color: #f5f5f5 !important;
             }}
 
-            /* placeholder も薄いグレーに統一 */
             .stApp ::placeholder {{
                 color: #aaaaaa !important;
                 opacity: 1 !important;
             }}
 
-            /* MultiSelect 表示部分 */
             .stApp div[role="combobox"] {{
                 background-color: #222222 !important;
                 color: #f5f5f5 !important;
@@ -169,7 +170,6 @@ def set_background(image_path: str):
                 border-radius: 6px !important;
             }}
 
-            /* ドロップダウンメニュー */
             .stApp div[data-baseweb="popover"] div[data-baseweb="menu"] {{
                 background-color: #222222 !important;
                 color: #f5f5f5 !important;
@@ -207,6 +207,30 @@ def set_background(image_path: str):
                 background-color: #444444 !important;
                 color: #bbbbbb !important;
                 border: 1px solid #777777 !important;
+            }}
+
+            /* =========================
+               掲示板カード
+               ========================= */
+            .bbs-card {{
+                background-color: rgba(0,0,0,0.75);
+                border-radius: 10px;
+                padding: 0.8rem 1rem;
+                margin-bottom: 0.4rem;
+            }}
+            .bbs-title {{
+                font-weight: 700;
+                margin-bottom: .2rem;
+            }}
+            .bbs-meta {{
+                font-size: 0.8rem;
+                opacity: 0.85;
+                margin-bottom: 0.4rem;
+            }}
+            .bbs-body {{
+                font-size: 0.95rem;
+                line-height: 1.5;
+                white-space: pre-wrap;
             }}
             </style>
             """,
@@ -778,14 +802,25 @@ with tab_bbs:
         st.caption("まだ投稿がありません。")
     else:
         for pid, author, ptype, cat, title, body, created in posts:
-            with st.container(border=True):
-                st.markdown(f"**[{ptype}] {title}**")
+            with st.container():
+                # カードの中身用テキストをエスケープ
+                title_html = html.escape(title or "")
                 meta = f"{created} / 投稿者: {author}"
                 if cat:
                     meta += f" / カテゴリ: {cat}"
-                st.caption(meta)
-                if body:
-                    st.write(body)
+                meta_html = html.escape(meta)
+                body_html = html.escape(body or "").replace("\n", "<br>")
+
+                st.markdown(
+                    f"""
+                    <div class="bbs-card">
+                      <div class="bbs-title">[{html.escape(ptype)}] {title_html}</div>
+                      <div class="bbs-meta">{meta_html}</div>
+                      <div class="bbs-body">{body_html}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
                 insta_user = get_insta(author)
                 colx, coly, colz = st.columns(3)
@@ -1050,4 +1085,5 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
 
