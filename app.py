@@ -89,10 +89,17 @@ def set_background(image_path: str):
                 background-color: #111111 !important;
             }}
 
-            /* ===== タブ ===== */
+                        /* ===== タブ ===== */
+            /* タブ全体の黒い帯を消す */
+            .stApp [data-baseweb="tabs"] {{
+                background-color: transparent !important;
+                box-shadow: none !important;
+            }}
+
             .stApp [data-baseweb="tab-list"] {{
                 gap: 0.4rem;
-                padding-bottom: 0.4rem;
+                padding: 0.4rem 0;
+                background-color: transparent !important;
             }}
 
             .stApp button[role="tab"] {{
@@ -115,6 +122,7 @@ def set_background(image_path: str):
             .stApp button[role="tab"]:hover {{
                 filter: brightness(1.05);
             }}
+
 
             /* ===== 入力コンポーネント ===== */
             .stApp input,
@@ -1051,5 +1059,6 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
 
 
