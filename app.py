@@ -57,7 +57,7 @@ st.set_page_config(
 # テーマ＆背景（完全ダーク固定）
 # ================================================================
 def set_background(image_path: str):
-    """背景画像を敷きつつ、完全ダークテーマで統一（OSテーマに依存しない）"""
+    """背景画像＋ダークテーマ＋タブデザイン＋入力欄の黒統一"""
     try:
         with open(image_path, "rb") as f:
             data = f.read()
@@ -66,13 +66,12 @@ def set_background(image_path: str):
         st.markdown(
             f"""
             <style>
-            /* OS設定に関係なく常に黒背景＋白文字ベースにする */
+            /* ベース：常に黒背景＋白文字 */
             html, body {{
                 background-color: #000000 !important;
                 color: #f5f5f5 !important;
             }}
 
-            /* アプリ本体に背景画像＋薄いオーバーレイ */
             .stApp {{
                 background: url("data:image/png;base64,{encoded}") no-repeat center center fixed;
                 background-size: cover;
@@ -81,7 +80,6 @@ def set_background(image_path: str):
                 background-color: rgba(0,0,0,0.40);
             }}
 
-            /* 全テキストを白系で統一（メイン＋サイドバー共通） */
             .stApp, .stApp p, .stApp li, .stApp span,
             .stApp label, .stApp div, .stMarkdown,
             .stTextInput label, .stSelectbox label, .stMultiSelect label {{
@@ -91,12 +89,43 @@ def set_background(image_path: str):
                 color: #ffffff !important;
             }}
 
-            /* サイドバー背景も暗く */
             section[data-testid="stSidebar"] {{
                 background-color: #111111 !important;
             }}
 
-            /* ===== 入力系コンポーネント全体を黒ベース＋白文字に統一 ===== */
+            /* =========================
+               タブデザイン（角丸＋強調）
+               ========================= */
+            .stApp [data-baseweb="tab-list"] {{
+                gap: 0.4rem;
+                padding-bottom: 0.4rem;
+            }}
+
+            .stApp button[role="tab"] {{
+                border-radius: 18px 18px 0 0 !important;
+                background-color: rgba(20,20,20,0.8) !important;
+                color: #dddddd !important;
+                border: 1px solid #333333 !important;
+                padding: 0.5rem 1.2rem !important;
+                font-weight: 600 !important;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.35);
+            }}
+
+            .stApp button[role="tab"][aria-selected="true"] {{
+                background: linear-gradient(135deg, #ff6b6b, #ff4b4b) !important;
+                color: #ffffff !important;
+                border-color: #ff8a8a !important;
+                box-shadow: 0 4px 10px rgba(0,0,0,0.55);
+            }}
+
+            .stApp button[role="tab"]:hover {{
+                filter: brightness(1.05);
+            }}
+
+            /* =========================
+               入力系コンポーネントを黒ベース化
+               （ライトモードでも白地×白文字にならないよう強制）
+               ========================= */
 
             /* 素の input / textarea / select */
             .stApp input,
@@ -107,27 +136,40 @@ def set_background(image_path: str):
                 border: 1px solid #555555 !important;
             }}
 
-            /* BaseWebコンポーネント（TextInput / Select / TextArea） */
+            /* BaseWeb ラッパー */
             .stApp div[data-baseweb="input"],
             .stApp div[data-baseweb="select"],
             .stApp div[data-baseweb="textarea"] {{
                 background-color: #222222 !important;
                 color: #f5f5f5 !important;
+                border-radius: 6px !important;
+                border: 1px solid #555555 !important;
             }}
+
+            /* 実際の入力部分（ここを押さえておくと白ボックスに白文字問題を潰せる） */
             .stApp div[data-baseweb="input"] input,
-            .stApp div[data-baseweb="select"] *,
-            .stApp div[data-baseweb="textarea"] textarea {{
+            .stApp div[data-baseweb="textarea"] textarea,
+            .stApp div[data-baseweb="select"] div,
+            .stApp div[role="combobox"] > div {{
+                background-color: #222222 !important;
                 color: #f5f5f5 !important;
             }}
 
-            /* selectbox / multiselect の見えている箱 (role="combobox") も黒くする */
+            /* placeholder も薄いグレーに統一 */
+            .stApp ::placeholder {{
+                color: #aaaaaa !important;
+                opacity: 1 !important;
+            }}
+
+            /* MultiSelect 表示部分 */
             .stApp div[role="combobox"] {{
                 background-color: #222222 !important;
                 color: #f5f5f5 !important;
                 border: 1px solid #555555 !important;
+                border-radius: 6px !important;
             }}
 
-            /* ドロップダウンの選択肢 */
+            /* ドロップダウンメニュー */
             .stApp div[data-baseweb="popover"] div[data-baseweb="menu"] {{
                 background-color: #222222 !important;
                 color: #f5f5f5 !important;
@@ -141,11 +183,12 @@ def set_background(image_path: str):
                 color: #ffffff !important;
             }}
 
-            /* ファイルアップローダーも暗めに＋ボタンも黒 */
+            /* ファイルアップローダー */
             [data-testid="stFileUploader"] > section,
             [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] {{
                 background-color: #222222 !important;
                 color: #f5f5f5 !important;
+                border-radius: 8px !important;
             }}
             [data-testid="stFileUploader"] button {{
                 background-color: #333333 !important;
@@ -153,12 +196,12 @@ def set_background(image_path: str):
                 border: 1px solid #777777 !important;
             }}
 
-            /* ===== ボタン系も全部黒ベース＋白文字に統一 ===== */
-
+            /* ボタン全般 */
             .stApp button {{
                 background-color: #333333 !important;
                 color: #f5f5f5 !important;
                 border: 1px solid #777777 !important;
+                border-radius: 6px !important;
             }}
             .stApp button[disabled] {{
                 background-color: #444444 !important;
@@ -1007,3 +1050,4 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
