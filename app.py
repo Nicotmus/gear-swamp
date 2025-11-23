@@ -1,6 +1,5 @@
 # ================================================================
 # app.py --- Gear Swamp（完全版）
-# （説明は省略：機能は今までと同じ）
 # ================================================================
 import os
 import csv
@@ -178,11 +177,16 @@ def set_background(image_path: str):
                 border: 1px solid #777777 !important;
             }}
 
+            /* ===== ボタンを少しコンパクトに ===== */
             .stApp button {{
                 background-color: #333333 !important;
                 color: #f5f5f5 !important;
                 border: 1px solid #777777 !important;
                 border-radius: 6px !important;
+                padding: 0.25rem 0.9rem !important;
+                font-size: 0.9rem !important;
+                margin-top: 0.1rem !important;
+                margin-bottom: 0.1rem !important;
             }}
             .stApp button[disabled] {{
                 background-color: #444444 !important;
@@ -190,20 +194,25 @@ def set_background(image_path: str):
                 border: 1px solid #777777 !important;
             }}
 
-            /* ===== 縦ブロック全体を黒パネル化 =====
-               data-testid="stVerticalBlock" は
-               在庫1件分・掲示板1件分などの親ブロックに付くので、
-               ここを強制で黒背景カードにする。
+            /* columns の左右余白を少し削る（スマホで詰める用） */
+            .stApp [data-testid="column"] {{
+                padding-left: 0.25rem !important;
+                padding-right: 0.25rem !important;
+            }}
+
+            /* ===== 在庫タブの「border=True コンテナ」だけ黒カード化 =====
+               → 他タブは border=True を使わないようにしておく
             */
-            .stApp div[data-testid="stVerticalBlock"] {{
+            .stApp div[data-testid="stVerticalBlockBorderWrapper"] {{
                 background-color: rgba(0,0,0,0.78) !important;
                 border-radius: 10px !important;
                 padding: 0.8rem 1rem 0.8rem !important;
                 margin-bottom: 0.8rem !important;
+                border: 1px solid #333333 !important;
                 box-shadow: 0 2px 6px rgba(0,0,0,0.45) !important;
             }}
 
-            /* 掲示板本文だけ一段濃い箱にする */
+            /* 掲示板本文だけ一段濃い箱にする（border=True は使わない） */
             .bbs-card {{
                 background-color: rgba(0,0,0,0.85);
                 border-radius: 10px;
@@ -233,10 +242,6 @@ def set_background(image_path: str):
 
 
 set_background("bg_gearswamp.png")
-st.markdown(
-    "<style>.stButton>button{width:100%;padding:.7rem;font-weight:600}</style>",
-    unsafe_allow_html=True,
-)
 
 # ================================================================
 # DBユーティリティ
@@ -582,18 +587,19 @@ with tab_list:
             )
             line_url_item = f"https://line.me/R/msg/text/?{quote(share_text_item)}"
 
-            col1, col2, col3, col4 = st.columns(4)
+            # --- 1段目：借りる / 返却 / 予約 / 状態変更 ---
+            c_b, c_r, c_s, c_state = st.columns([1, 1, 1, 2])
 
             if (
-                col1.button(" 借りる", key=f"b{i}")
+                c_b.button(" 借りる", key=f"b{i}")
                 and login
                 and is_active(member)
                 and status != "貸出中"
             ):
                 today = date.today()
                 due = compute_due(str(today), 90)
-                with get_conn() as conn:
-                    conn.execute(
+                with get_conn() as conn2:
+                    conn2.execute(
                         """
                         INSERT INTO loans(
                             item_id, borrower, start_date, due_date, reminder_days, status
@@ -601,18 +607,20 @@ with tab_list:
                         """,
                         (i, member, str(today), str(due), 90, "貸出中"),
                     )
-                    conn.execute("UPDATE items SET status='貸出中' WHERE id=?", (i,))
+                    conn2.execute(
+                        "UPDATE items SET status='貸出中' WHERE id=?", (i,)
+                    )
                 st.session_state["last_borrowed_item_id"] = i
                 st.success("借用登録しました（返却目安90日）。このパーツをLINEで共有できます ")
 
             if (
-                col2.button(" 返却", key=f"r{i}")
+                c_r.button(" 返却", key=f"r{i}")
                 and login
                 and is_active(member)
                 and status == "貸出中"
             ):
-                with get_conn() as conn:
-                    loan = conn.execute(
+                with get_conn() as conn2:
+                    loan = conn2.execute(
                         """
                         SELECT id FROM loans
                         WHERE item_id=? AND status='貸出中'
@@ -621,7 +629,7 @@ with tab_list:
                         (i,),
                     ).fetchone()
                     if loan:
-                        conn.execute(
+                        conn2.execute(
                             """
                             UPDATE loans
                             SET status='返却済', returned_date=?
@@ -629,16 +637,16 @@ with tab_list:
                             """,
                             (str(date.today()), loan[0]),
                         )
-                        conn.execute(
+                        conn2.execute(
                             "UPDATE items SET status='在庫あり' WHERE id=?", (i,)
                         )
                 st.session_state["last_borrowed_item_id"] = None
                 st.success("返却しました（在庫ありに戻しました）")
                 st.rerun()
 
-            if col3.button(" 予約", key=f"s{i}") and login and is_active(member):
-                with get_conn() as conn:
-                    pos = conn.execute(
+            if c_s.button(" 予約", key=f"s{i}") and login and is_active(member):
+                with get_conn() as conn2:
+                    pos = conn2.execute(
                         """
                         SELECT COALESCE(MAX(position),0)+1
                         FROM reservations WHERE item_id=?
@@ -646,7 +654,7 @@ with tab_list:
                         (i,),
                     ).fetchone()[0]
                     if pos <= 3:
-                        conn.execute(
+                        conn2.execute(
                             """
                             INSERT INTO reservations(
                                 item_id,reserver,position,reserved_date
@@ -659,43 +667,50 @@ with tab_list:
                     else:
                         st.warning("予約枠がいっぱいです")
 
-            new_st = col4.selectbox(
+            new_st = c_state.selectbox(
                 "状態変更",
                 ["変更しない", "在庫あり", "貸出中", "整備中", "アーカイブ"],
                 key=f"st{i}",
             )
+
+            # --- 2段目：更新 / アーカイブ / 削除 ---
+            c_upd, c_arc, c_del = st.columns([1, 1, 2])
+
             if (
-                col4.button(" 更新", key=f"upd{i}")
+                c_upd.button(" 更新", key=f"upd{i}")
                 and login
                 and is_active(member)
                 and new_st != "変更しない"
             ):
-                with get_conn() as conn:
-                    conn.execute("UPDATE items SET status=? WHERE id=?", (new_st, i))
+                with get_conn() as conn2:
+                    conn2.execute(
+                        "UPDATE items SET status=? WHERE id=?", (new_st, i)
+                    )
                 st.success("状態を更新しました")
                 st.rerun()
 
+            if c_arc.button(" アーカイブ", key=f"arc{i}") and login and is_active(member):
+                with get_conn() as conn2:
+                    conn2.execute(
+                        "UPDATE items SET status='アーカイブ' WHERE id=?", (i,)
+                    )
+                st.rerun()
+
+            with c_del:
+                confirm_del = st.checkbox("削除確認", key=f"cf{i}")
+                if (
+                    st.button(" 削除", key=f"del{i}")
+                    and confirm_del
+                    and login
+                    and is_active(member)
+                ):
+                    with get_conn() as conn2:
+                        conn2.execute("DELETE FROM items WHERE id=?", (i,))
+                    st.success("削除しました")
+                    st.rerun()
+
             if st.session_state.get("last_borrowed_item_id") == i:
                 st.markdown(f"[ この貸出をLINEで共有]({line_url_item})")
-
-            st.divider()
-            ax, ay, az = st.columns(3)
-            if ax.button(" アーカイブ", key=f"arc{i}") and login and is_active(member):
-                with get_conn() as conn:
-                    conn.execute("UPDATE items SET status='アーカイブ' WHERE id=?", (i,))
-                st.rerun()
-
-            confirm_del = ay.checkbox("削除確認", key=f"cf{i}")
-            if (
-                az.button(" 削除", key=f"del{i}")
-                and confirm_del
-                and login
-                and is_active(member)
-            ):
-                with get_conn() as conn:
-                    conn.execute("DELETE FROM items WHERE id=?", (i,))
-                st.success("削除しました")
-                st.rerun()
 
 # ================================================================
 # 掲示板タブ
@@ -768,7 +783,8 @@ with tab_bbs:
         st.caption("まだ投稿がありません。")
     else:
         for pid, author, ptype, cat, title, body, created in posts:
-            with st.container(border=True):
+            # 掲示板は border=False の素のコンテナ → 黒カード CSS の対象外
+            with st.container():
                 title_html = html.escape(title or "")
                 meta = f"{created} / 投稿者: {author}"
                 if cat:
@@ -1028,6 +1044,8 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
+
 
 
 
