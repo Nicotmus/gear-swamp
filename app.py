@@ -1,7 +1,6 @@
 # ================================================================
 # app.py --- Gear Swamp（完全版）
-# 招待制 / Admin管理 / 在庫・貸出・予約 / 掲示板 / CSV / 写真 /
-# カテゴリ・所有者・状態フィルタ / 自分の名前変更 / 返却目安90日
+# 招待制 / Admin管理 / 在庫・貸出・予約 / 掲示板 / CSV / 写真 など一式
 # ================================================================
 import os
 import csv
@@ -28,7 +27,7 @@ ADMIN_USERS = set(st.secrets.get("admin_users", []))  # 例: ["TETSUYA"]
 
 
 def notify_line(msg: str) -> bool:
-    """将来LINE通知に差し替える用ダミー"""
+    """将来LINE通知などに差し替える用のダミー"""
     return False
 
 
@@ -94,12 +93,6 @@ def set_background(image_path: str):
             .stApp [data-baseweb="tab-list"] {{
                 gap: 0.4rem;
                 padding-bottom: 0.4rem;
-
-                /* タブバーをスクロール固定 */
-                position: sticky;
-                top: 0;
-                z-index: 999;
-                background-color: rgba(0,0,0,0.9);
             }}
 
             .stApp button[role="tab"] {{
@@ -203,23 +196,22 @@ def set_background(image_path: str):
                 border: 1px solid #777777 !important;
             }}
 
-            /* columns の左右余白を少し削る（スマホで詰める用） */
+            /* 列間の余白をちょい詰めてスマホ向けに */
             .stApp [data-testid="column"] {{
                 padding-left: 0.25rem !important;
                 padding-right: 0.25rem !important;
             }}
 
-            /* ★ 在庫タブの「border=True コンテナ」だけ黒カード化 ★
-               → st.container(border=True) のラッパーに効く
+            /* ★ 在庫カードだけ黒くする（マーカーを持つ縦ブロックのみ） ★
+               :has() で「gs-item-card-marker を持つ stVerticalBlock」をターゲット。
             */
-            .stApp div[data-testid="stVerticalBlockBorderWrapper"],
-            .stApp div[class*="stVerticalBlockBorderWrapper"] {{
+            .stApp div[data-testid="stVerticalBlock"]:has(.gs-item-card-marker) {{
                 background-color: rgba(0,0,0,0.78) !important;
                 border-radius: 10px !important;
                 padding: 0.8rem 1rem 0.8rem !important;
                 margin-bottom: 0.8rem !important;
-                border: 1px solid #333333 !important;
                 box-shadow: 0 2px 6px rgba(0,0,0,0.45) !important;
+                border: 1px solid #333333 !important;
             }}
 
             /* 掲示板本文だけ一段濃い箱にする（border=False コンテナ内の div） */
@@ -571,8 +563,12 @@ with tab_list:
             return c.execute(q, p).fetchall()
 
     for i, nm, cat, size, cond, owner, loc, note, status, photo in list_items():
-        # ★ ここだけ border=True → 黒カードが効く
-        with st.container(border=True):
+        # ★ マーカーを置いた縦ブロックだけ CSS で黒カードにする
+        with st.container():
+            st.markdown(
+                '<div class="gs-item-card-marker"></div>', unsafe_allow_html=True
+            )
+
             img = blob_to_img(photo)
             if img:
                 st.image(img, use_column_width=True)
@@ -794,7 +790,7 @@ with tab_bbs:
         st.caption("まだ投稿がありません。")
     else:
         for pid, author, ptype, cat, title, body, created in posts:
-            # 掲示板側は border=False の素のコンテナ → 背景は元のまま
+            # 掲示板は border=False の普通のコンテナ → 背景は元のまま
             with st.container():
                 title_html = html.escape(title or "")
                 meta = f"{created} / 投稿者: {author}"
@@ -1055,3 +1051,5 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
+
