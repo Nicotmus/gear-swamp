@@ -8,7 +8,7 @@
 # 入力欄・select・ボタン・アップローダを黒ベース＋白文字に統一
 # 「借りる」後にそのパーツだけ LINE共有ボタン表示
 # 在庫登録タブの「カテゴリ」と「状態」はマルチセレクト赤チップ表示
-# 掲示板・在庫一覧ともに黒カード上に表示
+# 掲示板・在庫一覧ともに黒カード風コンテナ上に表示
 # ================================================================
 import os
 import csv
@@ -91,7 +91,7 @@ def set_background(image_path: str):
                 color: #ffffff !important;
             }}
 
-            /* caption もグレーではなく白寄りに */
+            /* caption も白寄りに */
             .stApp .stCaption, .stApp [data-testid="stCaption"] {{
                 color: #f5f5f5 !important;
             }}
@@ -132,7 +132,6 @@ def set_background(image_path: str):
             /* =========================
                入力系コンポーネントを黒ベース化
                ========================= */
-
             .stApp input,
             .stApp textarea,
             .stApp select {{
@@ -147,7 +146,7 @@ def set_background(image_path: str):
                 background-color: #222222 !important;
                 color: #f5f5f5 !important;
                 border-radius: 6px !important;
-                border: 1px solid #555555 !iant;
+                border: 1px solid #555555 !important;
             }}
 
             .stApp div[data-baseweb="input"] input,
@@ -210,13 +209,23 @@ def set_background(image_path: str):
             }}
 
             /* =========================
-               掲示板カード / 在庫カード
+               コンテナを黒カード風に
+               在庫一覧の1件分・掲示板の1件分などが対象
                ========================= */
+            .stApp div[data-testid="stContainer"] {{
+                background-color: rgba(0,0,0,0.78);
+                border-radius: 10px;
+                padding: 0.8rem 1rem 0.6rem;
+                margin-bottom: 0.7rem;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.45);
+            }}
+
+            /* 掲示板の中身カード（さらに一段暗く） */
             .bbs-card {{
-                background-color: rgba(0,0,0,0.75);
+                background-color: rgba(0,0,0,0.85);
                 border-radius: 10px;
                 padding: 0.8rem 1rem;
-                margin-bottom: 0.4rem;
+                margin-bottom: 0.1rem;
             }}
             .bbs-title {{
                 font-weight: 700;
@@ -231,14 +240,6 @@ def set_background(image_path: str):
                 font-size: 0.95rem;
                 line-height: 1.5;
                 white-space: pre-wrap;
-            }}
-
-            .item-card {{
-                background-color: rgba(0,0,0,0.78);
-                border-radius: 10px;
-                padding: 0.8rem 1rem 0.6rem;
-                margin-bottom: 0.7rem;
-                box-shadow: 0 2px 6px rgba(0,0,0,0.45);
             }}
             </style>
             """,
@@ -582,9 +583,6 @@ with tab_list:
 
     for i, nm, cat, size, cond, owner, loc, note, status, photo in list_items():
         with st.container():
-            # カード開始
-            st.markdown('<div class="item-card">', unsafe_allow_html=True)
-
             img = blob_to_img(photo)
             if img:
                 st.image(img, use_column_width=True)
@@ -739,9 +737,6 @@ with tab_list:
                     conn.execute("DELETE FROM items WHERE id=?", (i,))
                 st.success("削除しました")
                 st.rerun()
-
-            # カード終了
-            st.markdown("</div>", unsafe_allow_html=True)
 
 # ================================================================
 # 掲示板タブ
@@ -1098,3 +1093,4 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
