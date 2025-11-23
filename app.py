@@ -8,7 +8,7 @@
 # 入力欄・select・ボタン・アップローダを黒ベース＋白文字に統一
 # 「借りる」後にそのパーツだけ LINE共有ボタン表示
 # 在庫登録タブの「カテゴリ」と「状態」はマルチセレクト赤チップ表示
-# 掲示板投稿は黒カード上に表示
+# 掲示板・在庫一覧ともに黒カード上に表示
 # ================================================================
 import os
 import csv
@@ -79,7 +79,7 @@ def set_background(image_path: str):
                 background-size: cover;
             }}
             .stApp > div {{
-                background-color: rgba(0,0,0,0.20);
+                background-color: rgba(0,0,0,0.40);
             }}
 
             .stApp, .stApp p, .stApp li, .stApp span,
@@ -147,7 +147,7 @@ def set_background(image_path: str):
                 background-color: #222222 !important;
                 color: #f5f5f5 !important;
                 border-radius: 6px !important;
-                border: 1px solid #555555 !important;
+                border: 1px solid #555555 !iant;
             }}
 
             .stApp div[data-baseweb="input"] input,
@@ -210,7 +210,7 @@ def set_background(image_path: str):
             }}
 
             /* =========================
-               掲示板カード
+               掲示板カード / 在庫カード
                ========================= */
             .bbs-card {{
                 background-color: rgba(0,0,0,0.75);
@@ -231,6 +231,14 @@ def set_background(image_path: str):
                 font-size: 0.95rem;
                 line-height: 1.5;
                 white-space: pre-wrap;
+            }}
+
+            .item-card {{
+                background-color: rgba(0,0,0,0.78);
+                border-radius: 10px;
+                padding: 0.8rem 1rem 0.6rem;
+                margin-bottom: 0.7rem;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.45);
             }}
             </style>
             """,
@@ -573,7 +581,10 @@ with tab_list:
             return c.execute(q, p).fetchall()
 
     for i, nm, cat, size, cond, owner, loc, note, status, photo in list_items():
-        with st.container(border=True):
+        with st.container():
+            # カード開始
+            st.markdown('<div class="item-card">', unsafe_allow_html=True)
+
             img = blob_to_img(photo)
             if img:
                 st.image(img, use_column_width=True)
@@ -729,6 +740,9 @@ with tab_list:
                 st.success("削除しました")
                 st.rerun()
 
+            # カード終了
+            st.markdown("</div>", unsafe_allow_html=True)
+
 # ================================================================
 # 掲示板タブ
 # ================================================================
@@ -803,7 +817,6 @@ with tab_bbs:
     else:
         for pid, author, ptype, cat, title, body, created in posts:
             with st.container():
-                # カードの中身用テキストをエスケープ
                 title_html = html.escape(title or "")
                 meta = f"{created} / 投稿者: {author}"
                 if cat:
@@ -1085,5 +1098,3 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
-
-
