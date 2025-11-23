@@ -79,7 +79,7 @@ def set_background(image_path: str):
                 background-size: cover;
             }}
             .stApp > div {{
-                background-color: rgba(0,0,0,0.45);
+                background-color: rgba(0,0,0,0.35);
             }}
 
             .stApp, .stApp p, .stApp li, .stApp span,
@@ -1097,6 +1097,7 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
 
 
 
