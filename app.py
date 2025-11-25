@@ -1,5 +1,5 @@
 # ================================================================
-# app.py --- Gear Swamp（完成安定版）
+# app.py --- Gear Swamp（安定版）
 # 招待制 / Admin管理 / 在庫・貸出・予約 / 掲示板 / CSV / 写真 /
 # カテゴリ・所有者・状態フィルタ / 自分の名前変更 / 返却目安90日
 # ================================================================
@@ -49,7 +49,7 @@ st.set_page_config(
 )
 
 # ================================================================
-# テーマ＆背景（ダーク固定＋入力欄黒化）
+# テーマ＆背景（ダーク固定＋入力欄黒化＋リンク色調整）
 # ================================================================
 def set_background(image_path: str):
     try:
@@ -90,7 +90,7 @@ def set_background(image_path: str):
                 background-color: #111111 !important;
             }}
 
-            /* ===== タブの見た目（固定はしない） ===== */
+            /* ===== タブ ===== */
             .stApp [data-baseweb="tab-list"] {{
                 gap: 0.4rem;
                 padding-bottom: 0.4rem;
@@ -186,7 +186,7 @@ def set_background(image_path: str):
                 color: #f5f5f5 !important;
                 border: 1px solid #777777 !important;
                 border-radius: 6px !important;
-                padding: 0.25rem 0.9rem !important;
+                padding: 0.25rem 0.9rem !iment;
                 font-size: 0.9rem !important;
                 margin-top: 0.1rem !important;
                 margin-bottom: 0.1rem !important;
@@ -223,6 +223,15 @@ def set_background(image_path: str):
                 font-size: 0.95rem;
                 line-height: 1.5;
                 white-space: pre-wrap;
+            }}
+
+            /* ===== リンク文字を明るい水色に統一 ===== */
+            .stApp a, .stApp a:link, .stApp a:visited {{
+                color: #8cc2ff !important;
+                text-decoration: underline !important;
+            }}
+            .stApp a:hover {{
+                color: #c6e3ff !important;
             }}
             </style>
             """,
@@ -552,7 +561,6 @@ with tab_list:
             return c.execute(q, p).fetchall()
 
     for i, nm, cat, size, cond, owner, loc, note, status, photo in list_items():
-        # 1部品あたりの枠：border=True（白枠）だけにして背景色はいじらない
         with st.container(border=True):
             img = blob_to_img(photo)
             if img:
@@ -887,7 +895,7 @@ with tab_mem:
                 value=sel if sel != "(なし)" else "",
                 key="admin_rename",
             )
-            new_insta = st.text入力(
+            new_insta = st.text_input(
                 "Instagram（@不要）",
                 value=get_insta(sel) or "",
                 key="admin_insta",
@@ -1035,6 +1043,8 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
+
 
 
 
