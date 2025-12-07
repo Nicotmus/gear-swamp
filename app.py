@@ -1,5 +1,5 @@
 # ================================================================
-# app.py --- Gear Swamp（安定版）
+# app.py --- Gear Swamp（安定版＋DB自己修復）
 # 招待制 / Admin管理 / 在庫・貸出・予約 / 掲示板 / CSV / 写真 /
 # カテゴリ・所有者・状態フィルタ / 自分の名前変更 / 返却目安90日
 # ================================================================
@@ -186,7 +186,7 @@ def set_background(image_path: str):
                 color: #f5f5f5 !important;
                 border: 1px solid #777777 !important;
                 border-radius: 6px !important;
-                padding: 0.25rem 0.9rem !iment;
+                padding: 0.25rem 0.9rem !important;
                 font-size: 0.9rem !important;
                 margin-top: 0.1rem !important;
                 margin-bottom: 0.1rem !important;
@@ -258,71 +258,94 @@ def get_conn():
 
 
 def init_all_tables():
-    with get_conn() as c:
-        c.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS members(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE,
-                insta TEXT,
-                is_active INTEGER DEFAULT 0,
-                created_at TEXT
-            );
+    """テーブルが無ければ作成し、DBが壊れている場合は退避して新規作成する"""
+    schema_sql = """
+    CREATE TABLE IF NOT EXISTS members(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE,
+        insta TEXT,
+        is_active INTEGER DEFAULT 0,
+        created_at TEXT
+    );
 
-            CREATE TABLE IF NOT EXISTS items(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT,
-                category TEXT,
-                size TEXT,
-                condition TEXT,
-                owner TEXT,
-                location TEXT,
-                note TEXT,
-                status TEXT DEFAULT '在庫あり',
-                photo BLOB
-            );
+    CREATE TABLE IF NOT EXISTS items(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        category TEXT,
+        size TEXT,
+        condition TEXT,
+        owner TEXT,
+        location TEXT,
+        note TEXT,
+        status TEXT DEFAULT '在庫あり',
+        photo BLOB
+    );
 
-            CREATE TABLE IF NOT EXISTS loans(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                item_id INTEGER,
-                borrower TEXT,
-                start_date TEXT,
-                due_date TEXT,
-                reminder_days INTEGER,
-                last_notified TEXT,
-                returned_date TEXT,
-                status TEXT DEFAULT '貸出中',
-                FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
-            );
+    CREATE TABLE IF NOT EXISTS loans(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_id INTEGER,
+        borrower TEXT,
+        start_date TEXT,
+        due_date TEXT,
+        reminder_days INTEGER,
+        last_notified TEXT,
+        returned_date TEXT,
+        status TEXT DEFAULT '貸出中',
+        FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
 
-            CREATE TABLE IF NOT EXISTS reservations(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                item_id INTEGER,
-                reserver TEXT,
-                position INTEGER,
-                reserved_date TEXT,
-                FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
-            );
+    CREATE TABLE IF NOT EXISTS reservations(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_id INTEGER,
+        reserver TEXT,
+        position INTEGER,
+        reserved_date TEXT,
+        FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
+    );
 
-            CREATE TABLE IF NOT EXISTS posts(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                author TEXT,
-                ptype TEXT,
-                category TEXT,
-                title TEXT,
-                body TEXT,
-                created TEXT
-            );
+    CREATE TABLE IF NOT EXISTS posts(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        author TEXT,
+        ptype TEXT,
+        category TEXT,
+        title TEXT,
+        body TEXT,
+        created TEXT
+    );
 
-            CREATE TABLE IF NOT EXISTS logs(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts TEXT,
-                member TEXT,
-                action TEXT,
-                detail TEXT
-            );
-            """
-        )
+    CREATE TABLE IF NOT EXISTS logs(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT,
+        member TEXT,
+        action TEXT,
+        detail TEXT
+    );
+    """
+
+    try:
+        # 通常パス：普通にテーブル作成
+        with get_conn() as c:
+            c.executescript(schema_sql)
+    except sqlite3.DatabaseError:
+        # DB が壊れている / SQLite ではないファイルだった場合
+        backup_path = f"{DB_PATH}.broken_{date.today().isoformat()}"
+        try:
+            if os.path.exists(DB_PATH):
+                # 既に同名バックアップがあれば上書きしないように少し工夫
+                idx = 1
+                orig_backup_path = backup_path
+                while os.path.exists(backup_path):
+                    backup_path = f"{orig_backup_path}_{idx}"
+                    idx += 1
+                os.replace(DB_PATH, backup_path)
+                st.warning(f"DBファイルが壊れていたため退避しました: {backup_path}")
+        except Exception as e:
+            st.error(f"壊れたDBの退避に失敗しました: {e}")
+
+        # 新規DBを作成
+        with get_conn() as c:
+            c.executescript(schema_sql)
+        st.info("新しいDBを作成しました。必要ならバックアップタブから過去のDBを復元できます。")
 
 
 def img_to_blob(img, max_px=1400):
@@ -625,7 +648,8 @@ with tab_list:
                         SELECT id FROM loans
                         WHERE item_id=? AND status='貸出中'
                         ORDER BY id DESC LIMIT 1
-                        """,
+                        """
+                        ,
                         (i,),
                     ).fetchone()
                     if loan:
