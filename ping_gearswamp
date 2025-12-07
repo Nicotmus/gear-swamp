@@ -1,0 +1,17 @@
+name: Ping Gear Swamp
+
+on:
+  schedule:
+    # 15分おきに実行（UTC基準）
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Curl Streamlit app
+        run: |
+          curl -m 10 -sS "$GEARSWAMP_URL" || echo "ping failed"
+        env:
+          GEARSWAMP_URL: ${{ secrets.GEARSWAMP_URL }}
