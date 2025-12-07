@@ -1,5 +1,5 @@
 # ================================================================
-# app.py --- Gear Swamp（安定版＋DB自己修復＋アイテム編集）
+# app.py --- Gear Swamp（安定版＋DB自己修復）
 # 招待制 / Admin管理 / 在庫・貸出・予約 / 掲示板 / CSV / 写真 /
 # カテゴリ・所有者・状態フィルタ / 自分の名前変更 / 返却目安90日
 # ================================================================
@@ -375,51 +375,6 @@ def compute_due(start, days):
 
 
 # ================================================================
-# ★ アイテム編集用ヘルパー
-# ================================================================
-def get_item_by_id(item_id: int):
-    """ID指定で items 1件を取得"""
-    with get_conn() as c:
-        row = c.execute(
-            """
-            SELECT id, name, category, size, condition, owner, location, note, status
-            FROM items
-            WHERE id = ?
-            """,
-            (item_id,),
-        ).fetchone()
-    return row
-
-
-def update_item_basic_fields(
-    item_id: int,
-    name: str,
-    category: str,
-    size: str,
-    condition: str,
-    owner: str,
-    location: str,
-    note: str,
-):
-    """名前・カテゴリ・サイズ・状態・所有者・保管場所・備考を更新"""
-    with get_conn() as c:
-        c.execute(
-            """
-            UPDATE items
-               SET name      = ?,
-                   category  = ?,
-                   size      = ?,
-                   condition = ?,
-                   owner     = ?,
-                   location  = ?,
-                   note      = ?
-             WHERE id        = ?
-            """,
-            (name, category, size, condition, owner, location, note, item_id),
-        )
-
-
-# ================================================================
 # メンバー関連
 # ================================================================
 def upsert_member(name, insta=None, activate=False):
@@ -602,9 +557,6 @@ with tab_list:
     f_status = st.multiselect("状態で絞る", ["在庫あり", "貸出中", "整備中", "アーカイブ"])
     show_arch = st.checkbox("アーカイブも表示", value=False)
 
-    # ★ 編集対象ID（セッションから）
-    edit_item_id = st.session_state.get("edit_item_id", None)
-
     def list_items():
         with get_conn() as c:
             q = """
@@ -631,9 +583,7 @@ with tab_list:
             q += " ORDER BY status DESC, category, name"
             return c.execute(q, p).fetchall()
 
-    items = list_items()
-
-    for i, nm, cat, size, cond, owner, loc, note, status, photo in items:
+    for i, nm, cat, size, cond, owner, loc, note, status, photo in list_items():
         with st.container(border=True):
             img = blob_to_img(photo)
             if img:
@@ -747,8 +697,8 @@ with tab_list:
                 key=f"st{i}",
             )
 
-            # --- 2段目：更新 / アーカイブ / 削除 / 編集 ---
-            c_upd, c_arc, c_del, c_edit = st.columns([1, 1, 2, 1])
+            # --- 2段目：更新 / アーカイブ / 削除 ---
+            c_upd, c_arc, c_del = st.columns([1, 1, 2])
 
             if (
                 c_upd.button(" 更新", key=f"upd{i}")
@@ -783,89 +733,8 @@ with tab_list:
                     st.success("削除しました")
                     st.rerun()
 
-            # ★ 編集ボタン
-            with c_edit:
-                if (
-                    st.button(" 編集", key=f"edit{i}")
-                    and login
-                    and is_active(member)
-                ):
-                    st.session_state["edit_item_id"] = i
-                    edit_item_id = i
-                    st.rerun()
-
             if st.session_state.get("last_borrowed_item_id") == i:
                 st.markdown(f"[ この貸出をLINEで共有]({line_url_item})")
-
-    # ★ 編集フォーム（一覧の下）
-    if edit_item_id is not None:
-        st.markdown("---")
-        st.subheader("パーツ情報の編集")
-
-        item_row = get_item_by_id(edit_item_id)
-        if not item_row:
-            st.warning("編集対象のパーツが見つかりませんでした。")
-        else:
-            (
-                _iid,
-                cur_name,
-                cur_cat,
-                cur_size,
-                cur_cond,
-                cur_owner,
-                cur_loc,
-                cur_note,
-                cur_status,
-            ) = item_row
-
-            with st.form("edit_item_form"):
-                e_name = st.text_input("パーツ名", value=cur_name or "")
-                e_cat = st.selectbox(
-                    "カテゴリ",
-                    CATEGORIES,
-                    index=CATEGORIES.index(cur_cat) if cur_cat in CATEGORIES else 0,
-                )
-                e_size = st.text_input("サイズ", value=cur_size or "")
-                e_cond = st.selectbox(
-                    "状態",
-                    ["新品", "美品", "使用感あり", "要整備"],
-                    index=(
-                        ["新品", "美品", "使用感あり", "要整備"].index(cur_cond)
-                        if cur_cond in ["新品", "美品", "使用感あり", "要整備"]
-                        else 2
-                    ),
-                )
-                e_owner = st.text_input("所有者", value=cur_owner or "")
-                e_loc = st.text_input("保管場所", value=cur_loc or "")
-                e_note = st.text_area("備考", value=cur_note or "", height=80)
-
-                col_e1, col_e2 = st.columns(2)
-                with col_e1:
-                    submitted = st.form_submit_button(" 保存する")
-                with col_e2:
-                    canceled = st.form_submit_button(" キャンセル")
-
-            if submitted:
-                if not e_name.strip():
-                    st.error("パーツ名は必須です。")
-                else:
-                    update_item_basic_fields(
-                        edit_item_id,
-                        e_name.strip(),
-                        e_cat,
-                        e_size.strip(),
-                        e_cond,
-                        e_owner.strip(),
-                        e_loc.strip(),
-                        e_note.strip(),
-                    )
-                    st.success("パーツ情報を更新しました。")
-                    st.session_state["edit_item_id"] = None
-                    st.rerun()
-
-            if canceled:
-                st.session_state["edit_item_id"] = None
-                st.rerun()
 
 # ================================================================
 # 掲示板タブ
@@ -1198,3 +1067,13 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
+
+
+
+
+
+
+
+
+
