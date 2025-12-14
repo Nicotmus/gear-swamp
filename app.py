@@ -18,34 +18,7 @@ import streamlit as st
 from PIL import Image
 from dateutil.parser import parse as dt_parse
 
-# ===== PG接続テスト（必ず最初に走らせる）=====
-import streamlit as st
-import psycopg2
 
-st.info("PG smoke test: start")
-
-try:
-    cfg = st.secrets["postgres"]
-    conn = psycopg2.connect(
-        host=cfg["host"],
-        port=cfg["port"],
-        dbname=cfg["dbname"],
-        user=cfg["user"],
-        password=cfg["password"],
-        connect_timeout=10,
-    )
-    cur = conn.cursor()
-    cur.execute("select 1;")
-    v = cur.fetchone()[0]
-    cur.close()
-    conn.close()
-    st.success(f"PG smoke test: OK (select 1 => {v})")
-except Exception as e:
-    st.error("PG smoke test: FAILED")
-    st.exception(e)
-
-st.stop()
-# ===========================================
 
 
 # ================================================================
@@ -1097,6 +1070,7 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
 
 
 
