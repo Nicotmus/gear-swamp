@@ -18,6 +18,70 @@ import streamlit as st
 from PIL import Image
 from dateutil.parser import parse as dt_parse
 
+# ================================================================
+# DB (Postgres / Supabase) layer  --- drop-in replacement
+# ================================================================
+from contextlib import contextmanager
+import streamlit as st
+import psycopg2
+import psycopg2.extras
+
+@contextmanager
+def get_conn():
+    """
+    Supabase (Session Pooler) に接続。
+    st.secrets["postgres"] に以下が入っている前提:
+      host, port, dbname, user, password
+    """
+    cfg = st.secrets["postgres"]
+    conn = psycopg2.connect(
+        host=cfg["host"],
+        port=int(cfg["port"]),
+        dbname=cfg["dbname"],
+        user=cfg["user"],
+        password=cfg["password"],
+        connect_timeout=10,
+        sslmode="require",  # Supabaseは基本これでOK
+    )
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+def db_exec(sql: str, params: tuple = ()):
+    """INSERT/UPDATE/DELETE 等（戻り値不要）"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+        conn.commit()
+
+def db_fetchall(sql: str, params: tuple = ()):
+    """SELECT 複数行"""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+    return rows
+
+def db_fetchone(sql: str, params: tuple = ()):
+    """SELECT 1行"""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, params)
+            row = cur.fetchone()
+    return row
+
+def db_insert_returning_id(sql: str, params: tuple = ()) -> int:
+    """
+    INSERT ... RETURNING id 用
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            new_id = cur.fetchone()[0]
+        conn.commit()
+    return int(new_id)
+
 
 
 
@@ -1070,6 +1134,7 @@ with tab_backup:
             st.rerun()
         except Exception as e:
             st.error(f"復元中にエラーが発生しました: {e}")
+
 
 
 
