@@ -1,5 +1,5 @@
 # ================================================================
-# app.py --- Gear Swamp（Supabase/Postgres版・初期化耐性）
+# app.py --- Gear Swamp（Supabase/Postgres版・初期化耐性・白画面対策）
 # 招待制 / Admin管理 / 在庫・貸出・予約 / 掲示板 / CSV / 写真 /
 # カテゴリ・所有者・状態フィルタ / 自分の名前変更 / 返却目安90日
 # ================================================================
@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import date, timedelta
 from urllib.parse import quote
 import base64
+import traceback
 
 import qrcode
 import streamlit as st
@@ -24,7 +25,7 @@ import psycopg2
 # ================================================================
 SHARED_PASSCODE = st.secrets.get("passcode", "1234")
 INVITE_CODE = st.secrets.get("invite_code", "join-123")
-ADMIN_USERS = set(st.secrets.get("admin_users", []))  # 例: ["TETSUYA"]
+ADMIN_USERS = set(st.secrets.get("admin_users") or [])  # 例: ["TETSUYA"]
 
 CATEGORIES = [
     "フレーム/フォーク", "ヘッドセット", "ハンドル/ステム", "グリップ/バーテープ",
@@ -52,7 +53,7 @@ def notify_line(msg: str) -> bool:
 # ================================================================
 @contextmanager
 def get_conn():
-    cfg = st.secrets["postgres"]
+    cfg = st.secrets["postgres"]  # ここが未設定だと例外になる（画面に出す）
     conn = psycopg2.connect(
         host=cfg["host"],
         port=int(cfg["port"]),
@@ -85,13 +86,81 @@ def db_fetchone(sql: str, params: tuple = ()):
             cur.execute(sql, params)
             return cur.fetchone()
 
-def db_insert_returning_id(sql: str, params: tuple = ()) -> int:
+# ================================================================
+# スキーマ（初期化耐性：テーブル自動作成）
+# ================================================================
+@st.cache_resource(show_spinner=False)
+def ensure_schema_once():
+    stmts = [
+        """
+        CREATE TABLE IF NOT EXISTS members(
+            id SERIAL PRIMARY KEY,
+            name TEXT UNIQUE,
+            insta TEXT,
+            is_active BOOLEAN DEFAULT FALSE,
+            created_at TEXT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS items(
+            id SERIAL PRIMARY KEY,
+            name TEXT,
+            category TEXT,
+            size TEXT,
+            condition TEXT,
+            owner TEXT,
+            location TEXT,
+            note TEXT,
+            status TEXT DEFAULT '在庫あり',
+            photo BYTEA
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS loans(
+            id SERIAL PRIMARY KEY,
+            item_id INTEGER,
+            borrower TEXT,
+            start_date TEXT,
+            due_date TEXT,
+            reminder_days INTEGER,
+            last_notified TEXT,
+            returned_date TEXT,
+            status TEXT DEFAULT '貸出中'
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS reservations(
+            id SERIAL PRIMARY KEY,
+            item_id INTEGER,
+            reserver TEXT,
+            position INTEGER,
+            reserved_date TEXT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS posts(
+            id SERIAL PRIMARY KEY,
+            author TEXT,
+            ptype TEXT,
+            category TEXT,
+            title TEXT,
+            body TEXT,
+            created TEXT
+        )
+        """,
+        # 便利なインデックス（あってもなくてもOK）
+        "CREATE INDEX IF NOT EXISTS idx_items_status ON items(status)",
+        "CREATE INDEX IF NOT EXISTS idx_items_owner ON items(owner)",
+        "CREATE INDEX IF NOT EXISTS idx_loans_item_status ON loans(item_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_resv_item_pos ON reservations(item_id, position)",
+        "CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(id DESC)",
+    ]
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, params)
-            new_id = cur.fetchone()[0]
+            for s in stmts:
+                cur.execute(s)
         conn.commit()
-    return int(new_id)
+    return True
 
 # ================================================================
 # テーマ＆背景（ダーク固定＋入力欄黒化＋リンク色調整）
@@ -283,9 +352,8 @@ def set_background(image_path: str):
             unsafe_allow_html=True,
         )
     except Exception as e:
-        st.write("背景CSSエラー:", e)
-
-set_background("bg_gearswamp.png")
+        st.warning("背景の読み込みに失敗しました（bg_gearswamp.png を確認）")
+        st.code(str(e))
 
 # ================================================================
 # 画像ユーティリティ
@@ -382,575 +450,626 @@ def delete_member(member_name):
     return cnt
 
 # ================================================================
-# サイドバー
+# ここから本体（白画面対策：例外を画面に出す）
 # ================================================================
-with st.sidebar:
-    st.subheader("メンバー認証")
+def run_app():
+    # スキーマ確保（初回のみ）
+    ensure_schema_once()
 
-    default_name = st.session_state.get("member", "")
-    member = st.text_input("あなたの名前", value=default_name)
-    st.session_state["member"] = member
+    # 背景
+    set_background("bg_gearswamp.png")
 
-    passcode = st.text_input("共通パスコード", type="password")
-    login = bool(member) and (passcode == SHARED_PASSCODE)
+    # セッション初期化
+    st.session_state.setdefault("member", "")
+    st.session_state.setdefault("authed", False)
+    st.session_state.setdefault("insta_input", "")
+    st.session_state.setdefault("last_borrowed_item_id", None)
 
-    insta = st.text_input("Instagram（任意・@不要）", value=get_insta(member) or "")
-    invite = st.text_input("招待コード（初回のみ）", type="password")
+    # ============================================================
+    # サイドバー（重要：入力中にDBを触らない／Submit時のみDBアクセス）
+    # ============================================================
+    with st.sidebar:
+        st.subheader("メンバー認証")
 
-    if member:
-        active_now = is_active(member)
-        if not active_now and invite == INVITE_CODE:
-            upsert_member(member, insta, True)
-            st.success("参加が有効化されました。")
-        else:
-            upsert_member(member, insta, active_now)
+        with st.form("auth_form", clear_on_submit=False):
+            member_in = st.text_input("あなたの名前", value=st.session_state["member"])
+            passcode = st.text_input("共通パスコード", type="password")
+            invite = st.text_input("招待コード（初回のみ）", type="password")
+            insta_in = st.text_input("Instagram（任意・@不要）", value=st.session_state.get("insta_input", ""))
 
-    if login and is_active(member):
-        st.success(f"認証OK：{member}")
-    elif member:
-        st.warning("未承認です。共通パスコードと招待コードを確認してください。")
+            submitted = st.form_submit_button("認証/更新")
 
-    if is_admin(member):
-        st.info(" 管理者モード")
+        st.session_state["member"] = (member_in or "").strip()
+        member = st.session_state["member"]
 
-    st.divider()
-    st.subheader("アプリ共有（QR）")
-    app_url = st.text_input("このアプリのURL", value="")
-    if app_url:
-        qr = qrcode.make(app_url)
-        st.image(qr, caption="このQRを仲間に配布", use_column_width=True)
+        if submitted:
+            login = bool(member) and (passcode == SHARED_PASSCODE)
 
-# ================================================================
-# タブ
-# ================================================================
-tab_inv, tab_list, tab_bbs, tab_logs, tab_mem, tab_csv, tab_backup = st.tabs(
-    [" 在庫登録", " 在庫/貸出/予約", " 掲示板", " 履歴", " メンバー", " CSV", " バックアップ"]
-)
+            insta_in = (insta_in or "").strip().lstrip("@")
+            st.session_state["insta_input"] = insta_in
 
-# ================================================================
-# 在庫登録タブ
-# ================================================================
-with tab_inv:
-    st.subheader("在庫登録")
-    c1, c2 = st.columns(2)
+            try:
+                active_now = is_active(member) if member else False
 
-    with c1:
-        name = st.text_input("パーツ名")
-        cat_sel = st.multiselect(
-            "カテゴリ（1件選択）",
-            CATEGORIES,
-            default=[CATEGORIES[0]] if not name else [],
-            max_selections=1,
-        )
-        cat = cat_sel[0] if cat_sel else ""
-        size = st.text_input("サイズ")
-        cond_sel = st.multiselect(
-            "状態（1件選択）",
-            ["新品", "美品", "使用感あり", "要整備"],
-            default=["新品"],
-            max_selections=1,
-        )
-        cond = cond_sel[0] if cond_sel else ""
+                if member and (not active_now) and (invite == INVITE_CODE):
+                    upsert_member(member, insta_in, True)
+                    st.success("参加が有効化されました。")
+                    active_now = True
+                elif member:
+                    upsert_member(member, insta_in, active_now)
 
-    with c2:
-        owner = st.text_input("所有者", value=member)
-        loc = st.text_input("保管場所")
-        note = st.text_area("備考", height=80)
-        pic = st.file_uploader("写真", type=["jpg", "jpeg", "png"])
+                st.session_state["authed"] = bool(login and active_now)
 
-    if st.button(
-        "登録",
-        disabled=not (login and is_active(member) and name and cat and cond),
-    ):
-        blob = img_to_blob(Image.open(pic)) if pic else None
-        db_exec(
+            except Exception as e:
+                st.session_state["authed"] = False
+                st.error("DB接続でエラーが発生しました（Supabaseの状態/Secrets/通信を確認）")
+                st.code(str(e))
+
+        authed = bool(st.session_state.get("authed", False))
+
+        if authed:
+            st.success(f"認証OK：{member}")
+        elif member:
+            st.warning("未承認です。共通パスコードと招待コードを確認してください。")
+
+        if is_admin(member):
+            st.info(" 管理者モード")
+
+        st.divider()
+        st.subheader("アプリ共有（QR）")
+        app_url = st.text_input("このアプリのURL", value="")
+        if app_url:
+            qr = qrcode.make(app_url)
+            st.image(qr, caption="このQRを仲間に配布", width=260)
+
+    login = bool(st.session_state["member"]) and authed
+    member = st.session_state["member"]
+
+    # ============================================================
+    # タブ
+    # ============================================================
+    tab_inv, tab_list, tab_bbs, tab_logs, tab_mem, tab_csv, tab_backup = st.tabs(
+        [" 在庫登録", " 在庫/貸出/予約", " 掲示板", " 履歴", " メンバー", " CSV", " バックアップ"]
+    )
+
+    # ============================================================
+    # 在庫登録タブ
+    # ============================================================
+    with tab_inv:
+        st.subheader("在庫登録")
+        c1, c2 = st.columns(2)
+
+        with c1:
+            name = st.text_input("パーツ名")
+            cat_sel = st.multiselect(
+                "カテゴリ（1件選択）",
+                CATEGORIES,
+                default=[CATEGORIES[0]] if not name else [],
+                max_selections=1,
+            )
+            cat = cat_sel[0] if cat_sel else ""
+            size = st.text_input("サイズ")
+            cond_sel = st.multiselect(
+                "状態（1件選択）",
+                ["新品", "美品", "使用感あり", "要整備"],
+                default=["新品"],
+                max_selections=1,
+            )
+            cond = cond_sel[0] if cond_sel else ""
+
+        with c2:
+            owner = st.text_input("所有者", value=member)
+            loc = st.text_input("保管場所")
+            note = st.text_area("備考", height=80)
+            pic = st.file_uploader("写真", type=["jpg", "jpeg", "png"])
+
+        if st.button(
+            "登録",
+            disabled=not (login and name and cat and cond),
+        ):
+            blob = img_to_blob(Image.open(pic)) if pic else None
+            db_exec(
+                """
+                INSERT INTO items(
+                    name,category,size,condition,owner,location,note,status,photo
+                ) VALUES(%s,%s,%s,%s,%s,%s,%s,'在庫あり',%s)
+                """,
+                (name, cat, size, cond, owner, loc, note, blob),
+            )
+            st.success("登録しました。")
+            st.rerun()
+
+    # ============================================================
+    # 在庫/貸出/予約タブ
+    # ============================================================
+    with tab_list:
+        st.subheader("在庫一覧")
+
+        kw = st.text_input("キーワード検索", "")
+        f_cat = st.multiselect("カテゴリ絞り込み", CATEGORIES)
+        f_owner = st.text_input("所有者で絞る", "")
+        f_status = st.multiselect("状態で絞る", ["在庫あり", "貸出中", "整備中", "アーカイブ"])
+        show_arch = st.checkbox("アーカイブも表示", value=False)
+
+        def list_items():
+            q = """
+                SELECT id,name,category,size,condition,owner,location,note,status,photo
+                FROM items
+                WHERE 1=1
             """
-            INSERT INTO items(
-                name,category,size,condition,owner,location,note,status,photo
-            ) VALUES(%s,%s,%s,%s,%s,%s,%s,'在庫あり',%s)
-            """,
-            (name, cat, size, cond, owner, loc, note, blob),
-        )
-        st.success("登録しました。")
+            p = []
+            if kw:
+                q += " AND (name ILIKE %s OR owner ILIKE %s OR note ILIKE %s OR size ILIKE %s)"
+                like = f"%{kw}%"
+                p += [like, like, like, like]
+            if f_cat:
+                q += " AND category IN (" + ",".join(["%s"] * len(f_cat)) + ")"
+                p += list(f_cat)
+            if f_owner:
+                q += " AND owner ILIKE %s"
+                p.append(f"%{f_owner}%")
+            if f_status:
+                q += " AND status IN (" + ",".join(["%s"] * len(f_status)) + ")"
+                p += list(f_status)
+            if not show_arch:
+                q += " AND status <> 'アーカイブ'"
+            q += " ORDER BY status DESC, category, name"
+            return db_fetchall(q, tuple(p))
 
-# ================================================================
-# 在庫/貸出/予約タブ
-# ================================================================
-with tab_list:
-    st.subheader("在庫一覧")
+        items = list_items()
+        if not items:
+            st.caption("該当する在庫がありません。")
 
-    kw = st.text_input("キーワード検索", "")
-    f_cat = st.multiselect("カテゴリ絞り込み", CATEGORIES)
-    f_owner = st.text_input("所有者で絞る", "")
-    f_status = st.multiselect("状態で絞る", ["在庫あり", "貸出中", "整備中", "アーカイブ"])
-    show_arch = st.checkbox("アーカイブも表示", value=False)
+        for i, nm, cat, size, cond, owner, loc, note, status, photo in items:
+            with st.container(border=True):
+                img = blob_to_img(photo)
+                if img:
+                    st.image(img, width=900)
 
-    def list_items():
+                st.markdown(f"**{nm}**")
+                st.caption(
+                    f"{cat} / サイズ:{size or '-'} / 状態:{cond} / 所有:{owner} / ステータス:{status}"
+                )
+
+                with st.expander("詳細", expanded=False):
+                    st.caption(f"保管場所: {loc or '-'}")
+                    st.write(note or "備考なし")
+
+                share_text_item = (
+                    f"[Gear Swamp]\n"
+                    f"パーツ: {nm}\n"
+                    f"カテゴリ: {cat}\n"
+                    f"サイズ: {size or '-'}\n"
+                    f"状態: {cond}\n"
+                    f"所有者: {owner}\n"
+                    f"保管場所: {loc or '-'}\n"
+                    f"備考: {note or '-'}"
+                )
+                line_url_item = f"https://line.me/R/msg/text/?{quote(share_text_item)}"
+
+                c_b, c_r, c_s, c_state = st.columns([1, 1, 1, 2])
+
+                # 借りる
+                if (
+                    c_b.button(" 借りる", key=f"b{i}")
+                    and login
+                    and status != "貸出中"
+                ):
+                    today = date.today()
+                    due = compute_due(str(today), 90)
+                    with get_conn() as conn2:
+                        with conn2.cursor() as cur:
+                            cur.execute(
+                                """
+                                INSERT INTO loans(
+                                    item_id, borrower, start_date, due_date, reminder_days, status
+                                ) VALUES(%s,%s,%s,%s,%s,%s)
+                                """,
+                                (i, member, str(today), str(due), 90, "貸出中"),
+                            )
+                            cur.execute("UPDATE items SET status='貸出中' WHERE id=%s", (i,))
+                        conn2.commit()
+                    st.session_state["last_borrowed_item_id"] = i
+                    st.success("借用登録しました（返却目安90日）。このパーツをLINEで共有できます ")
+
+                # 返却
+                if (
+                    c_r.button(" 返却", key=f"r{i}")
+                    and login
+                    and status == "貸出中"
+                ):
+                    with get_conn() as conn2:
+                        with conn2.cursor() as cur:
+                            cur.execute(
+                                """
+                                SELECT id FROM loans
+                                WHERE item_id=%s AND status='貸出中'
+                                ORDER BY id DESC LIMIT 1
+                                """,
+                                (i,),
+                            )
+                            loan = cur.fetchone()
+                            if loan:
+                                cur.execute(
+                                    """
+                                    UPDATE loans
+                                    SET status='返却済', returned_date=%s
+                                    WHERE id=%s
+                                    """,
+                                    (str(date.today()), loan[0]),
+                                )
+                                cur.execute("UPDATE items SET status='在庫あり' WHERE id=%s", (i,))
+                        conn2.commit()
+                    st.session_state["last_borrowed_item_id"] = None
+                    st.success("返却しました（在庫ありに戻しました）")
+                    st.rerun()
+
+                # 予約
+                if c_s.button(" 予約", key=f"s{i}") and login:
+                    with get_conn() as conn2:
+                        with conn2.cursor() as cur:
+                            cur.execute(
+                                "SELECT COALESCE(MAX(position),0)+1 FROM reservations WHERE item_id=%s",
+                                (i,),
+                            )
+                            pos = cur.fetchone()[0]
+                            if pos <= 3:
+                                cur.execute(
+                                    """
+                                    INSERT INTO reservations(
+                                        item_id,reserver,position,reserved_date
+                                    ) VALUES(%s,%s,%s,%s)
+                                    """,
+                                    (i, member, pos, str(date.today())),
+                                )
+                                conn2.commit()
+                                st.success(f"{pos}番目で予約しました")
+                                st.rerun()
+                            else:
+                                st.warning("予約枠がいっぱいです")
+
+                new_st = c_state.selectbox(
+                    "状態変更",
+                    ["変更しない", "在庫あり", "貸出中", "整備中", "アーカイブ"],
+                    key=f"st{i}",
+                )
+
+                c_upd, c_arc, c_del = st.columns([1, 1, 2])
+
+                if (
+                    c_upd.button(" 更新", key=f"upd{i}")
+                    and login
+                    and new_st != "変更しない"
+                ):
+                    db_exec("UPDATE items SET status=%s WHERE id=%s", (new_st, i))
+                    st.success("状態を更新しました")
+                    st.rerun()
+
+                if c_arc.button(" アーカイブ", key=f"arc{i}") and login:
+                    db_exec("UPDATE items SET status='アーカイブ' WHERE id=%s", (i,))
+                    st.rerun()
+
+                with c_del:
+                    confirm_del = st.checkbox("削除確認", key=f"cf{i}")
+                    if (
+                        st.button(" 削除", key=f"del{i}")
+                        and confirm_del
+                        and login
+                    ):
+                        db_exec("DELETE FROM items WHERE id=%s", (i,))
+                        st.success("削除しました")
+                        st.rerun()
+
+                if st.session_state.get("last_borrowed_item_id") == i:
+                    st.markdown(f"[ この貸出をLINEで共有]({line_url_item})")
+
+    # ============================================================
+    # 掲示板タブ
+    # ============================================================
+    with tab_bbs:
+        st.subheader(" 掲示板（試乗・貸し借り・雑談）")
+
+        st.markdown("### 新規投稿")
+        if login:
+            ptype = st.selectbox("種別", POST_TYPES)
+            pcat = st.selectbox("関連カテゴリ（任意）", ["指定なし"] + CATEGORIES)
+            ptitle = st.text_input("タイトル", placeholder="例：誰かピスト試乗させてくれませんか？")
+            pbody = st.text_area("本文", height=100)
+
+            if st.button(" 投稿する"):
+                if not ptitle.strip():
+                    st.error("タイトルは必須です。")
+                else:
+                    db_exec(
+                        """
+                        INSERT INTO posts(author,ptype,category,title,body,created)
+                        VALUES(%s,%s,%s,%s,%s,%s)
+                        """,
+                        (
+                            member,
+                            ptype,
+                            None if pcat == "指定なし" else pcat,
+                            ptitle.strip(),
+                            pbody.strip(),
+                            str(date.today()),
+                        ),
+                    )
+                    st.success("投稿しました。")
+                    st.rerun()
+        else:
+            st.caption("※ 投稿には認証が必要です。")
+
+        st.markdown("### 投稿一覧")
+
+        kw_b = st.text_input("キーワード検索（掲示板）", "")
+        f_type = st.multiselect("種別で絞る", POST_TYPES)
+        f_cat_b = st.multiselect("カテゴリで絞る", CATEGORIES)
+        f_author = st.text_input("投稿者で絞る", "")
+
         q = """
-            SELECT id,name,category,size,condition,owner,location,note,status,photo
-            FROM items
+            SELECT id,author,ptype,category,title,body,created
+            FROM posts
             WHERE 1=1
         """
         p = []
-        if kw:
-            q += " AND (name ILIKE %s OR owner ILIKE %s OR note ILIKE %s OR size ILIKE %s)"
-            like = f"%{kw}%"
-            p += [like, like, like, like]
-        if f_cat:
-            q += " AND category IN (" + ",".join(["%s"] * len(f_cat)) + ")"
-            p += list(f_cat)
-        if f_owner:
-            q += " AND owner ILIKE %s"
-            p.append(f"%{f_owner}%")
-        if f_status:
-            q += " AND status IN (" + ",".join(["%s"] * len(f_status)) + ")"
-            p += list(f_status)
-        if not show_arch:
-            q += " AND status <> 'アーカイブ'"
-        q += " ORDER BY status DESC, category, name"
-        return db_fetchall(q, tuple(p))
+        if kw_b:
+            q += " AND (title ILIKE %s OR body ILIKE %s)"
+            like = f"%{kw_b}%"
+            p += [like, like]
+        if f_type:
+            q += " AND ptype IN (" + ",".join(["%s"] * len(f_type)) + ")"
+            p += list(f_type)
+        if f_cat_b:
+            q += " AND category IN (" + ",".join(["%s"] * len(f_cat_b)) + ")"
+            p += list(f_cat_b)
+        if f_author:
+            q += " AND author ILIKE %s"
+            p.append(f"%{f_author}%")
+        q += " ORDER BY id DESC"
 
-    for i, nm, cat, size, cond, owner, loc, note, status, photo in list_items():
-        with st.container(border=True):
-            img = blob_to_img(photo)
-            if img:
-                st.image(img, use_column_width=True)
+        posts = db_fetchall(q, tuple(p))
 
-            st.markdown(f"**{nm}**")
-            st.caption(
-                f"{cat} / サイズ:{size or '-'} / 状態:{cond} / 所有:{owner} / ステータス:{status}"
-            )
+        if not posts:
+            st.caption("まだ投稿がありません。")
+        else:
+            for pid, author, ptype, cat, title, body, created in posts:
+                with st.container():
+                    title_html = html.escape(title or "")
+                    meta = f"{created} / 投稿者: {author}"
+                    if cat:
+                        meta += f" / カテゴリ: {cat}"
+                    meta_html = html.escape(meta)
+                    body_html = html.escape(body or "").replace("\n", "<br>")
 
-            with st.expander("詳細", expanded=False):
-                st.caption(f"保管場所: {loc or '-'}")
-                st.write(note or "備考なし")
+                    st.markdown(
+                        f"""
+                        <div class="bbs-card">
+                          <div class="bbs-title">[{html.escape(ptype)}] {title_html}</div>
+                          <div class="bbs-meta">{meta_html}</div>
+                          <div class="bbs-body">{body_html}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
-            share_text_item = (
-                f"[Gear Swamp]\n"
-                f"パーツ: {nm}\n"
-                f"カテゴリ: {cat}\n"
-                f"サイズ: {size or '-'}\n"
-                f"状態: {cond}\n"
-                f"所有者: {owner}\n"
-                f"保管場所: {loc or '-'}\n"
-                f"備考: {note or '-'}"
-            )
-            line_url_item = f"https://line.me/R/msg/text/?{quote(share_text_item)}"
+                    insta_user = get_insta(author)
+                    colx, coly, colz = st.columns(3)
 
-            c_b, c_r, c_s, c_state = st.columns([1, 1, 1, 2])
+                    if insta_user:
+                        insta_url = f"https://instagram.com/{insta_user}"
+                        colx.markdown(f"[ @{insta_user} へDM](<{insta_url}>)")
 
-            # 借りる
-            if (
-                c_b.button(" 借りる", key=f"b{i}")
-                and login
-                and is_active(member)
-                and status != "貸出中"
-            ):
-                today = date.today()
-                due = compute_due(str(today), 90)
-                with get_conn() as conn2:
-                    with conn2.cursor() as cur:
-                        cur.execute(
-                            """
-                            INSERT INTO loans(
-                                item_id, borrower, start_date, due_date, reminder_days, status
-                            ) VALUES(%s,%s,%s,%s,%s,%s)
-                            """,
-                            (i, member, str(today), str(due), 90, "貸出中"),
-                        )
-                        cur.execute("UPDATE items SET status='貸出中' WHERE id=%s", (i,))
-                    conn2.commit()
-                st.session_state["last_borrowed_item_id"] = i
-                st.success("借用登録しました（返却目安90日）。このパーツをLINEで共有できます ")
+                    share_text = f"[Gear Swamp掲示板]\n[{ptype}] {title}\n{body}\nfrom {author}"
+                    line_url = f"https://line.me/R/msg/text/?{quote(share_text)}"
+                    coly.markdown(f"[ LINEで共有]({line_url})")
 
-            # 返却
-            if (
-                c_r.button(" 返却", key=f"r{i}")
-                and login
-                and is_active(member)
-                and status == "貸出中"
-            ):
-                with get_conn() as conn2:
-                    with conn2.cursor() as cur:
-                        cur.execute(
-                            """
-                            SELECT id FROM loans
-                            WHERE item_id=%s AND status='貸出中'
-                            ORDER BY id DESC LIMIT 1
-                            """,
-                            (i,),
-                        )
-                        loan = cur.fetchone()
-                        if loan:
-                            cur.execute(
-                                """
-                                UPDATE loans
-                                SET status='返却済', returned_date=%s
-                                WHERE id=%s
-                                """,
-                                (str(date.today()), loan[0]),
-                            )
-                            cur.execute("UPDATE items SET status='在庫あり' WHERE id=%s", (i,))
-                    conn2.commit()
-                st.session_state["last_borrowed_item_id"] = None
-                st.success("返却しました（在庫ありに戻しました）")
-                st.rerun()
-
-            # 予約
-            if c_s.button(" 予約", key=f"s{i}") and login and is_active(member):
-                with get_conn() as conn2:
-                    with conn2.cursor() as cur:
-                        cur.execute(
-                            "SELECT COALESCE(MAX(position),0)+1 FROM reservations WHERE item_id=%s",
-                            (i,),
-                        )
-                        pos = cur.fetchone()[0]
-                        if pos <= 3:
-                            cur.execute(
-                                """
-                                INSERT INTO reservations(
-                                    item_id,reserver,position,reserved_date
-                                ) VALUES(%s,%s,%s,%s)
-                                """,
-                                (i, member, pos, str(date.today())),
-                            )
-                            conn2.commit()
-                            st.success(f"{pos}番目で予約しました")
+                    if is_admin(member):
+                        if colz.button(" 投稿削除", key=f"del_post_{pid}"):
+                            db_exec("DELETE FROM posts WHERE id=%s", (pid,))
+                            st.success("投稿を削除しました。")
                             st.rerun()
-                        else:
-                            st.warning("予約枠がいっぱいです")
 
-            new_st = c_state.selectbox(
-                "状態変更",
-                ["変更しない", "在庫あり", "貸出中", "整備中", "アーカイブ"],
-                key=f"st{i}",
-            )
-
-            c_upd, c_arc, c_del = st.columns([1, 1, 2])
-
-            if (
-                c_upd.button(" 更新", key=f"upd{i}")
-                and login
-                and is_active(member)
-                and new_st != "変更しない"
-            ):
-                db_exec("UPDATE items SET status=%s WHERE id=%s", (new_st, i))
-                st.success("状態を更新しました")
-                st.rerun()
-
-            if c_arc.button(" アーカイブ", key=f"arc{i}") and login and is_active(member):
-                db_exec("UPDATE items SET status='アーカイブ' WHERE id=%s", (i,))
-                st.rerun()
-
-            with c_del:
-                confirm_del = st.checkbox("削除確認", key=f"cf{i}")
-                if (
-                    st.button(" 削除", key=f"del{i}")
-                    and confirm_del
-                    and login
-                    and is_active(member)
-                ):
-                    db_exec("DELETE FROM items WHERE id=%s", (i,))
-                    st.success("削除しました")
-                    st.rerun()
-
-            if st.session_state.get("last_borrowed_item_id") == i:
-                st.markdown(f"[ この貸出をLINEで共有]({line_url_item})")
-
-# ================================================================
-# 掲示板タブ
-# ================================================================
-with tab_bbs:
-    st.subheader(" 掲示板（試乗・貸し借り・雑談）")
-
-    st.markdown("### 新規投稿")
-    if login and is_active(member):
-        ptype = st.selectbox("種別", POST_TYPES)
-        pcat = st.selectbox("関連カテゴリ（任意）", ["指定なし"] + CATEGORIES)
-        ptitle = st.text_input("タイトル", placeholder="例：誰かピスト試乗させてくれませんか？")
-        pbody = st.text_area("本文", height=100)
-
-        if st.button(" 投稿する"):
-            if not ptitle.strip():
-                st.error("タイトルは必須です。")
-            else:
-                db_exec(
-                    """
-                    INSERT INTO posts(author,ptype,category,title,body,created)
-                    VALUES(%s,%s,%s,%s,%s,%s)
-                    """,
-                    (
-                        member,
-                        ptype,
-                        None if pcat == "指定なし" else pcat,
-                        ptitle.strip(),
-                        pbody.strip(),
-                        str(date.today()),
-                    ),
-                )
-                st.success("投稿しました。")
-                st.rerun()
-    else:
-        st.caption("※ 投稿には認証が必要です。")
-
-    st.markdown("### 投稿一覧")
-
-    kw_b = st.text_input("キーワード検索（掲示板）", "")
-    f_type = st.multiselect("種別で絞る", POST_TYPES)
-    f_cat_b = st.multiselect("カテゴリで絞る", CATEGORIES)
-    f_author = st.text_input("投稿者で絞る", "")
-
-    q = """
-        SELECT id,author,ptype,category,title,body,created
-        FROM posts
-        WHERE 1=1
-    """
-    p = []
-    if kw_b:
-        q += " AND (title ILIKE %s OR body ILIKE %s)"
-        like = f"%{kw_b}%"
-        p += [like, like]
-    if f_type:
-        q += " AND ptype IN (" + ",".join(["%s"] * len(f_type)) + ")"
-        p += list(f_type)
-    if f_cat_b:
-        q += " AND category IN (" + ",".join(["%s"] * len(f_cat_b)) + ")"
-        p += list(f_cat_b)
-    if f_author:
-        q += " AND author ILIKE %s"
-        p.append(f"%{f_author}%")
-    q += " ORDER BY id DESC"
-
-    posts = db_fetchall(q, tuple(p))
-
-    if not posts:
-        st.caption("まだ投稿がありません。")
-    else:
-        for pid, author, ptype, cat, title, body, created in posts:
-            with st.container():
-                title_html = html.escape(title or "")
-                meta = f"{created} / 投稿者: {author}"
-                if cat:
-                    meta += f" / カテゴリ: {cat}"
-                meta_html = html.escape(meta)
-                body_html = html.escape(body or "").replace("\n", "<br>")
-
-                st.markdown(
-                    f"""
-                    <div class="bbs-card">
-                      <div class="bbs-title">[{html.escape(ptype)}] {title_html}</div>
-                      <div class="bbs-meta">{meta_html}</div>
-                      <div class="bbs-body">{body_html}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
+    # ============================================================
+    # 履歴タブ
+    # ============================================================
+    with tab_logs:
+        st.subheader("貸出・返却履歴")
+        rows = db_fetchall(
+            """
+            SELECT i.name,l.borrower,l.start_date,l.due_date,l.returned_date,l.status
+            FROM loans l LEFT JOIN items i ON l.item_id=i.id
+            ORDER BY l.id DESC
+            """
+        )
+        if not rows:
+            st.caption("まだ履歴はありません。")
+        else:
+            for name, b, s, d, r, stt in rows:
+                st.caption(
+                    f"{name or '(削除済み)'} / 借り手:{b} / {s} → {r or '-'} / "
+                    f"返却目安:{d or '-'} / 状態:{stt}"
                 )
 
-                insta_user = get_insta(author)
-                colx, coly, colz = st.columns(3)
+    # ============================================================
+    # メンバータブ
+    # ============================================================
+    with tab_mem:
+        st.subheader("メンバー")
 
-                if insta_user:
-                    insta_url = f"https://instagram.com/{insta_user}"
-                    colx.markdown(f"[ @{insta_user} へDM](<{insta_url}>)")
+        st.markdown("### 自分の名前を変更")
+        if login:
+            new_my_name = st.text_input("新しい自分の名前", value=member, key="self_rename")
+            if st.button(" 自分の名前を変更", key="self_rename_btn"):
+                if new_my_name and new_my_name != member:
+                    ok = rename_member(member, new_my_name)
+                    if ok:
+                        st.success(f"{member} → {new_my_name} に変更しました。")
+                        st.info("※ 次回からサイドバーの『あなたの名前』も新しい名前でログインしてください。")
+                    else:
+                        st.error("名前の変更に失敗しました。")
+        else:
+            st.caption("※ 認証済みメンバーだけ自分の名前を変更できます。")
 
-                share_text = f"[Gear Swamp掲示板]\n[{ptype}] {title}\n{body}\nfrom {author}"
-                line_url = f"https://line.me/R/msg/text/?{quote(share_text)}"
-                coly.markdown(f"[ LINEで共有]({line_url})")
+        st.markdown("### メンバー一覧")
+        ms = db_fetchall("SELECT name, insta, is_active FROM members ORDER BY name")
+        for n, i, a in ms:
+            st.markdown(f"- **{n}** {' ' if a else ' '} @{i or '-'}")
 
-                if is_admin(member):
-                    if colz.button(" 投稿削除", key=f"del_post_{pid}"):
-                        db_exec("DELETE FROM posts WHERE id=%s", (pid,))
-                        st.success("投稿を削除しました。")
+        st.divider()
+        st.subheader(" 管理者ツール")
+        if not is_admin(member):
+            st.caption("（admin_users に登録された管理者のみ）")
+        else:
+            members_all = db_fetchall("SELECT name, insta, is_active FROM members ORDER BY name")
+            names = [m[0] for m in members_all] or ["(なし)"]
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("### 1) メンバー編集")
+                sel = st.selectbox("対象メンバー", names, index=0)
+                new_name = st.text_input(
+                    "新しい表示名（リネーム）",
+                    value=sel if sel != "(なし)" else "",
+                    key="admin_rename",
+                )
+                new_insta = st.text_input(
+                    "Instagram（@不要）",
+                    value=get_insta(sel) or "",
+                    key="admin_insta",
+                )
+                new_active = st.checkbox(
+                    "有効化", value=is_active(sel), key="admin_active"
+                )
+                if st.button(" 変更保存", key="admin_save"):
+                    if sel != "(なし)":
+                        if new_name and new_name != sel:
+                            ok = rename_member(sel, new_name)
+                            if not ok:
+                                st.error("名前変更に失敗しました。")
+                                st.stop()
+                            sel = new_name
+                        upsert_member(sel, new_insta, activate=new_active)
+                        st.success("更新しました。")
                         st.rerun()
 
-# ================================================================
-# 履歴タブ
-# ================================================================
-with tab_logs:
-    st.subheader("貸出・返却履歴")
-    rows = db_fetchall(
-        """
-        SELECT i.name,l.borrower,l.start_date,l.due_date,l.returned_date,l.status
-        FROM loans l LEFT JOIN items i ON l.item_id=i.id
-        ORDER BY l.id DESC
-        """
-    )
-    if not rows:
-        st.caption("まだ履歴はありません。")
-    else:
-        for name, b, s, d, r, stt in rows:
-            st.caption(
-                f"{name or '(削除済み)'} / 借り手:{b} / {s} → {r or '-'} / "
-                f"返却目安:{d or '-'} / 状態:{stt}"
-            )
-
-# ================================================================
-# メンバータブ
-# ================================================================
-with tab_mem:
-    st.subheader("メンバー")
-
-    st.markdown("### 自分の名前を変更")
-    if login and is_active(member):
-        new_my_name = st.text_input("新しい自分の名前", value=member, key="self_rename")
-        if st.button(" 自分の名前を変更", key="self_rename_btn"):
-            if new_my_name and new_my_name != member:
-                ok = rename_member(member, new_my_name)
-                if ok:
-                    st.success(f"{member} → {new_my_name} に変更しました。")
-                    st.info("※ 次回からサイドバーの『あなたの名前』も新しい名前でログインしてください。")
-                else:
-                    st.error("名前の変更に失敗しました。")
-    else:
-        st.caption("※ 認証済みメンバーだけ自分の名前を変更できます。")
-
-    st.markdown("### メンバー一覧")
-    ms = db_fetchall("SELECT name, insta, is_active FROM members ORDER BY name")
-    for n, i, a in ms:
-        st.markdown(f"- **{n}** {' ' if a else ' '} @{i or '-'}")
-
-    st.divider()
-    st.subheader(" 管理者ツール")
-    if not is_admin(member):
-        st.caption("（admin_users に登録された管理者のみ）")
-    else:
-        members_all = db_fetchall("SELECT name, insta, is_active FROM members ORDER BY name")
-        names = [m[0] for m in members_all] or ["(なし)"]
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("### 1) メンバー編集")
-            sel = st.selectbox("対象メンバー", names, index=0)
-            new_name = st.text_input(
-                "新しい表示名（リネーム）",
-                value=sel if sel != "(なし)" else "",
-                key="admin_rename",
-            )
-            new_insta = st.text_input(
-                "Instagram（@不要）",
-                value=get_insta(sel) or "",
-                key="admin_insta",
-            )
-            new_active = st.checkbox(
-                "有効化", value=is_active(sel), key="admin_active"
-            )
-            if st.button(" 変更保存", key="admin_save"):
-                if sel != "(なし)":
-                    if new_name and new_name != sel:
-                        ok = rename_member(sel, new_name)
-                        if not ok:
-                            st.error("名前変更に失敗しました。")
-                            st.stop()
-                        sel = new_name
-                    upsert_member(sel, new_insta, activate=new_active)
-                    st.success("更新しました。")
+            with col2:
+                st.markdown("### 2) 所有アイテムの移管")
+                from_m = st.selectbox("移管元", names, index=0, key="admin_from")
+                to_m = st.selectbox(
+                    "移管先",
+                    [n for n in names if n != from_m],
+                    index=0 if len(names) > 1 else 0,
+                    key="admin_to",
+                )
+                if st.button(" 移管実行", key="admin_transfer"):
+                    cnt = transfer_ownership(from_m, to_m)
+                    st.success(f"{cnt}件のアイテムを {from_m} → {to_m} に移管しました。")
                     st.rerun()
 
-        with col2:
-            st.markdown("### 2) 所有アイテムの移管")
-            from_m = st.selectbox("移管元", names, index=0, key="admin_from")
-            to_m = st.selectbox(
-                "移管先",
-                [n for n in names if n != from_m],
-                index=0 if len(names) > 1 else 0,
-                key="admin_to",
-            )
-            if st.button(" 移管実行", key="admin_transfer"):
-                cnt = transfer_ownership(from_m, to_m)
-                st.success(f"{cnt}件のアイテムを {from_m} → {to_m} に移管しました。")
-                st.rerun()
+                st.markdown("### 3) メンバー削除")
+                del_m = st.selectbox("削除対象", names, index=0, key="admin_del")
+                confirm_name = st.text_input("確認用にメンバー名を入力", key="admin_del_confirm")
+                st.caption(
+                    "※ 削除しても既存の貸出・予約・在庫のテキストはそのまま残ります。"
+                    "完全に消したい場合は、先にリネームしてから削除してください。"
+                )
+                if st.button(" メンバー削除", key="admin_del_btn"):
+                    if confirm_name != del_m:
+                        st.error("確認用の名前が一致しません。")
+                    else:
+                        deleted = delete_member(del_m)
+                        st.success(f"{del_m} を削除しました（削除件数: {deleted}）。")
+                        st.rerun()
 
-            st.markdown("### 3) メンバー削除")
-            del_m = st.selectbox("削除対象", names, index=0, key="admin_del")
-            confirm_name = st.text_input("確認用にメンバー名を入力", key="admin_del_confirm")
-            st.caption(
-                "※ 削除しても既存の貸出・予約・在庫のテキストはそのまま残ります。"
-                "完全に消したい場合は、先にリネームしてから削除してください。"
-            )
-            if st.button(" メンバー削除", key="admin_del_btn"):
-                if confirm_name != del_m:
-                    st.error("確認用の名前が一致しません。")
-                else:
-                    deleted = delete_member(del_m)
-                    st.success(f"{del_m} を削除しました（削除件数: {deleted}）。")
-                    st.rerun()
+    # ============================================================
+    # CSVタブ
+    # ============================================================
+    with tab_csv:
+        st.subheader("CSV一括登録（在庫）")
 
-# ================================================================
-# CSVタブ
-# ================================================================
-with tab_csv:
-    st.subheader("CSV一括登録（在庫）")
-
-    templ = StringIO()
-    w = csv.writer(templ)
-    w.writerow(["name", "category", "size", "condition", "owner", "location", "note"])
-    w.writerow(["700C Front Wheel", "ホイール", "700C/100x12", "美品", "TETSUYA", "自宅A", "ハブDT350"])
-    w.writerow(["11s Cassette 11-28", "スプロケット/コグ", "HG 11s", "使用感あり", "TETSUYA", "自宅B", "軽微摩耗"])
-    st.download_button(
-        "テンプレCSVをダウンロード",
-        templ.getvalue(),
-        file_name="parts_template.csv",
-        mime="text/csv",
-    )
-
-    up = st.file_uploader("CSVを選択（UTF-8推奨）", type=["csv"])
-    if up and st.button("一括登録を実行"):
-        text = up.read().decode("utf-8", "ignore")
-        reader = csv.DictReader(StringIO(text))
-        count = 0
-        with get_conn() as conn:
-            with conn.cursor() as c:
-                for row in reader:
-                    name = (row.get("name") or "").strip()
-                    if not name:
-                        continue
-                    category = (row.get("category") or "").strip() or "その他"
-                    size = (row.get("size") or "").strip()
-                    condition = (row.get("condition") or "").strip() or "使用感あり"
-                    owner = (row.get("owner") or "").strip() or member
-                    location = (row.get("location") or "").strip()
-                    note = (row.get("note") or "").strip()
-                    c.execute(
-                        """
-                        INSERT INTO items(
-                            name,category,size,condition,owner,location,note,status,photo
-                        ) VALUES(%s,%s,%s,%s,%s,%s,%s,'在庫あり',NULL)
-                        """,
-                        (name, category, size, condition, owner, location, note),
-                    )
-                    count += 1
-            conn.commit()
-        st.success(f"{count} 件 登録しました。")
-
-# ================================================================
-# バックアップタブ（Supabase運用では無効化：SQLite前提のため）
-# ================================================================
-with tab_backup:
-    st.subheader(" バックアップ（Supabase運用）")
-
-    st.info(
-        "このアプリは現在 **Supabase(Postgres)** を使っています。\n\n"
-        "以前の SQLiteファイル（parts_share.db）を直接バックアップ/復元する方式は **無効** です。"
-    )
-
-    st.markdown("### 代替：CSVでエクスポート（在庫 items）")
-
-    if st.button(" items をCSVでダウンロード"):
-        rows = db_fetchall(
-            "SELECT id,name,category,size,condition,owner,location,note,status,created_at FROM items ORDER BY id"
-        )
-        out = StringIO()
-        w = csv.writer(out)
-        w.writerow(["id","name","category","size","condition","owner","location","note","status","created_at"])
-        for r in rows:
-            w.writerow(list(r))
+        templ = StringIO()
+        w = csv.writer(templ)
+        w.writerow(["name", "category", "size", "condition", "owner", "location", "note"])
+        w.writerow(["700C Front Wheel", "ホイール", "700C/100x12", "美品", "TETSUYA", "自宅A", "ハブDT350"])
+        w.writerow(["11s Cassette 11-28", "スプロケット/コグ", "HG 11s", "使用感あり", "TETSUYA", "自宅B", "軽微摩耗"])
         st.download_button(
-            "CSVをダウンロード",
-            data=out.getvalue(),
-            file_name=f"items_export_{date.today().isoformat()}.csv",
+            "テンプレCSVをダウンロード",
+            templ.getvalue(),
+            file_name="parts_template.csv",
             mime="text/csv",
         )
 
-    st.markdown("### 代替：Supabase側のバックアップ")
-    st.caption("本格的なバックアップは Supabase側（スナップショット/バックアップ）で運用するのが正攻法です。")
+        up = st.file_uploader("CSVを選択（UTF-8推奨）", type=["csv"])
+        if up and st.button("一括登録を実行"):
+            text = up.read().decode("utf-8", "ignore")
+            reader = csv.DictReader(StringIO(text))
+            count = 0
+            with get_conn() as conn:
+                with conn.cursor() as c:
+                    for row in reader:
+                        name = (row.get("name") or "").strip()
+                        if not name:
+                            continue
+                        category = (row.get("category") or "").strip() or "その他"
+                        size = (row.get("size") or "").strip()
+                        condition = (row.get("condition") or "").strip() or "使用感あり"
+                        owner = (row.get("owner") or "").strip() or member
+                        location = (row.get("location") or "").strip()
+                        note = (row.get("note") or "").strip()
+                        c.execute(
+                            """
+                            INSERT INTO items(
+                                name,category,size,condition,owner,location,note,status,photo
+                            ) VALUES(%s,%s,%s,%s,%s,%s,%s,'在庫あり',NULL)
+                            """,
+                            (name, category, size, condition, owner, location, note),
+                        )
+                        count += 1
+                conn.commit()
+            st.success(f"{count} 件 登録しました。")
+            st.rerun()
+
+    # ============================================================
+    # バックアップタブ（Supabase運用）
+    # ============================================================
+    with tab_backup:
+        st.subheader(" バックアップ（Supabase運用）")
+
+        st.info(
+            "このアプリは現在 **Supabase(Postgres)** を使っています。\n\n"
+            "以前の SQLiteファイル（parts_share.db）を直接バックアップ/復元する方式は **無効** です。"
+        )
+
+        st.markdown("### 代替：CSVでエクスポート（在庫 items）")
+
+        if st.button(" items をCSVでダウンロード"):
+            rows = db_fetchall(
+                "SELECT id,name,category,size,condition,owner,location,note,status FROM items ORDER BY id"
+            )
+            out = StringIO()
+            w = csv.writer(out)
+            w.writerow(["id","name","category","size","condition","owner","location","note","status"])
+            for r in rows:
+                w.writerow(list(r))
+
+            st.download_button(
+                "CSVをダウンロード",
+                data=out.getvalue(),
+                file_name=f"items_export_{date.today().isoformat()}.csv",
+                mime="text/csv",
+            )
+
+        st.markdown("### 代替：Supabase側のバックアップ")
+        st.caption("本格的なバックアップは Supabase側（スナップショット/バックアップ）で運用するのが正攻法です。")
+
+
+# ================================================================
+# 実行（白画面対策：例外を画面に出す）
+# ================================================================
+try:
+    run_app()
+except Exception:
+    st.error("🔥 アプリ実行中にエラーが発生しました（白画面防止のため詳細を表示します）")
+    st.code(traceback.format_exc())
+    raise
