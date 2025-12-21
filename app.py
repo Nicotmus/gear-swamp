@@ -1,20 +1,16 @@
 # ================================================================
 # app.py --- Gear Swamp（Supabase/Postgres版・安定/高速・完全差替え）
 #
-# ✅ 今回の目的：在庫（パーツ）登録を確実に通す
-# - 在庫登録を st.form 化（連打/二重登録/リラン事故を減らす）
-# - member_id / member_name の未設定を防止して INSERT 前に弾く
-# - 画像アップロードを getvalue→BytesIO→PIL に統一して堅牢化
-# - DB例外はその場で trace を表示（白画面防止）
-# - clear_read_caches を安全化（未定義キャッシュがあっても落ちない）
+# ✅ 今回の修正（パーツ登録ができない原因）
+# - items.id の採番シーケンスがズレていて duplicate key が出る
+#   → 起動時に setval で MAX(id)+1 に自己修復（items/loans/reservations/posts）
 #
 # ✅ 速度/安定
 # - psycopg2 接続プール
 # - N+1撲滅（在庫/予約）
 # - st.cache_data（TTL）
-# - photo(BYTEA=memoryview)は別キャッシュでbytes化
+# - photo(BYTEA=memoryview)は一覧キャッシュに含めず、bytes化して別キャッシュ
 # ================================================================
-
 import base64
 import traceback
 from io import BytesIO
@@ -121,7 +117,7 @@ def clear_read_caches():
 
 
 # ================================================================
-# 初期化耐性（テーブル作成＋席作成）
+# 初期化耐性（テーブル作成＋席作成＋シーケンス自己修復）
 # ================================================================
 @st.cache_resource(show_spinner=False)
 def ensure_schema_and_slots_once(max_members: int):
@@ -175,10 +171,23 @@ def ensure_schema_and_slots_once(max_members: int):
                 reserved_date TEXT
             )""")
 
-            # 旧DB追従（列が無い場合に追加）
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS posts(
+                id SERIAL PRIMARY KEY,
+                author TEXT,
+                author_id INTEGER,
+                ptype TEXT,
+                category TEXT,
+                title TEXT,
+                body TEXT,
+                created TEXT
+            )""")
+
+            # 旧DB追従
             c.execute("ALTER TABLE items ADD COLUMN IF NOT EXISTS owner_id INTEGER")
             c.execute("ALTER TABLE loans ADD COLUMN IF NOT EXISTS borrower_id INTEGER")
             c.execute("ALTER TABLE reservations ADD COLUMN IF NOT EXISTS reserver_id INTEGER")
+            c.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS author_id INTEGER")
             c.execute("ALTER TABLE reservations ADD COLUMN IF NOT EXISTS position INTEGER")
             c.execute("ALTER TABLE reservations ADD COLUMN IF NOT EXISTS reserved_date TEXT")
 
@@ -187,6 +196,7 @@ def ensure_schema_and_slots_once(max_members: int):
             c.execute("CREATE INDEX IF NOT EXISTS idx_items_owner_id ON items(owner_id)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_resv_item_pos ON reservations(item_id, position)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_loans_item_status ON loans(item_id, status)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_posts_id_desc ON posts(id DESC)")
 
             # ✅席作成：一括INSERT（不足分のみ作成）
             c.execute(
@@ -198,6 +208,47 @@ def ensure_schema_and_slots_once(max_members: int):
                 """,
                 (str(date.today()), int(max_members))
             )
+
+            # ✅ 重要：SERIALのシーケンスを MAX(id)+1 に同期（duplicate key 対策）
+            # これをやると「次に採番される id」が既存と衝突しなくなる
+            c.execute("""
+            DO $$
+            DECLARE
+              seq TEXT;
+            BEGIN
+              -- items
+              seq := pg_get_serial_sequence('items','id');
+              IF seq IS NOT NULL THEN
+                EXECUTE format(
+                  'SELECT setval(%L, COALESCE((SELECT MAX(id) FROM items),0)+1, false)', seq
+                );
+              END IF;
+
+              -- loans
+              seq := pg_get_serial_sequence('loans','id');
+              IF seq IS NOT NULL THEN
+                EXECUTE format(
+                  'SELECT setval(%L, COALESCE((SELECT MAX(id) FROM loans),0)+1, false)', seq
+                );
+              END IF;
+
+              -- reservations
+              seq := pg_get_serial_sequence('reservations','id');
+              IF seq IS NOT NULL THEN
+                EXECUTE format(
+                  'SELECT setval(%L, COALESCE((SELECT MAX(id) FROM reservations),0)+1, false)', seq
+                );
+              END IF;
+
+              -- posts
+              seq := pg_get_serial_sequence('posts','id');
+              IF seq IS NOT NULL THEN
+                EXECUTE format(
+                  'SELECT setval(%L, COALESCE((SELECT MAX(id) FROM posts),0)+1, false)', seq
+                );
+              END IF;
+            END $$;
+            """)
 
         conn.commit()
     return True
@@ -300,9 +351,6 @@ def compute_due(start, days):
 # ================================================================
 # members（UPDATEのみ）
 # ================================================================
-def is_admin_name(display_name: str) -> bool:
-    return bool(display_name) and display_name in ADMIN_USERS
-
 def get_member(mid: int):
     r = db_fetchone("SELECT id, name, insta, is_active FROM members WHERE id=%s", (mid,))
     if not r:
@@ -602,9 +650,6 @@ def run_app():
 
     tab_inv, tab_list, tab_logs = st.tabs([" 在庫登録", " 在庫/貸出/予約", " 履歴"])
 
-    # ============================================================
-    # 在庫登録（★ここが今回の主修正：フォーム化＋堅牢化）
-    # ============================================================
     with tab_inv:
         st.subheader("在庫登録")
         if not authed:
@@ -656,7 +701,7 @@ def run_app():
             if not cond:
                 st.warning("状態を1つ選んで。"); st.stop()
 
-            # 画像処理（堅牢化：UploadedFile → bytes → PIL）
+            # 画像処理（UploadedFile → bytes → PIL）
             blob = None
             try:
                 if pic is not None:
@@ -687,9 +732,6 @@ def run_app():
                 st.code(traceback.format_exc())
                 st.stop()
 
-    # ============================================================
-    # 在庫一覧 / 予約
-    # ============================================================
     with tab_list:
         st.subheader("在庫一覧")
 
@@ -731,34 +773,6 @@ def run_app():
                         lines = [f"{pos}) {rname}（{rdt or '-'}）" for pos, rname, rid, rdt in resv_list]
                         st.markdown("**予約状況**  " + " / ".join(lines))
 
-                c_s, c_cancel = st.columns([1, 1])
-
-                if c_s.button(" 予約", key=f"s{iid}"):
-                    if not authed:
-                        st.warning("予約には認証が必要です。")
-                    else:
-                        ok, msg = can_reserve(iid, int(member_id))
-                        if not ok:
-                            st.warning(msg)
-                        else:
-                            pos = create_reservation(iid, int(member_id), member_name)
-                            st.success(f"{pos}番目で予約しました")
-                            st.rerun()
-
-                if c_cancel.button(" キャンセル", key=f"cxl{iid}"):
-                    if not authed:
-                        st.warning("キャンセルには認証が必要です。")
-                    else:
-                        done = cancel_reservation(iid, int(member_id))
-                        if done:
-                            st.success("予約をキャンセルしました（繰り上げ済）")
-                            st.rerun()
-                        else:
-                            st.caption("自分の予約はありません。")
-
-    # ============================================================
-    # 履歴
-    # ============================================================
     with tab_logs:
         st.subheader("貸出・返却履歴")
         rows = loans_cached()
