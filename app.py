@@ -1,16 +1,22 @@
 # ================================================================
-# app.py --- Gear Swamp（Supabase/Postgres版・安定/高速・完全差替え）
+# app.py --- Gear Swamp（Supabase/Postgres版・安定/高速・完全修正版）
 #
-# ✅ 今回の修正（パーツ登録ができない原因）
-# - items.id の採番シーケンスがズレていて duplicate key が出る
-#   → 起動時に setval で MAX(id)+1 に自己修復（items/loans/reservations/posts）
+# ✅ 恒久対策（今回のduplicate keyの根本原因）
+# - SERIAL/IDENTITY の採番シーケンスがズレると duplicate key が出る
+#   → 起動時に MAX(id)+1 に自動同期（items/loans/reservations/posts）
 #
-# ✅ 速度/安定
+# ✅ 安定運用
 # - psycopg2 接続プール
-# - N+1撲滅（在庫/予約）
+# - st.form で登録処理を安定化（連打/二重送信防止）
+# - 画像アップロードを getvalue→BytesIO→PIL で堅牢化
+# - DB例外は画面に traceback 表示（白画面防止）
+# - clear_read_caches を安全化（未定義キャッシュでも落ちない）
+#
+# ✅ パフォーマンス
 # - st.cache_data（TTL）
-# - photo(BYTEA=memoryview)は一覧キャッシュに含めず、bytes化して別キャッシュ
+# - 写真は一覧キャッシュから分離（BYTEA→bytes化して別キャッシュ）
 # ================================================================
+
 import base64
 import traceback
 from io import BytesIO
@@ -123,6 +129,7 @@ def clear_read_caches():
 def ensure_schema_and_slots_once(max_members: int):
     with get_conn() as conn:
         with conn.cursor() as c:
+            # ---- tables ----
             c.execute("""
             CREATE TABLE IF NOT EXISTS members(
                 id INTEGER PRIMARY KEY,
@@ -183,7 +190,7 @@ def ensure_schema_and_slots_once(max_members: int):
                 created TEXT
             )""")
 
-            # 旧DB追従
+            # ---- column follow (safe) ----
             c.execute("ALTER TABLE items ADD COLUMN IF NOT EXISTS owner_id INTEGER")
             c.execute("ALTER TABLE loans ADD COLUMN IF NOT EXISTS borrower_id INTEGER")
             c.execute("ALTER TABLE reservations ADD COLUMN IF NOT EXISTS reserver_id INTEGER")
@@ -191,14 +198,14 @@ def ensure_schema_and_slots_once(max_members: int):
             c.execute("ALTER TABLE reservations ADD COLUMN IF NOT EXISTS position INTEGER")
             c.execute("ALTER TABLE reservations ADD COLUMN IF NOT EXISTS reserved_date TEXT")
 
-            # Index
+            # ---- indexes ----
             c.execute("CREATE INDEX IF NOT EXISTS idx_items_status ON items(status)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_items_owner_id ON items(owner_id)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_resv_item_pos ON reservations(item_id, position)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_loans_item_status ON loans(item_id, status)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_posts_id_desc ON posts(id DESC)")
 
-            # ✅席作成：一括INSERT（不足分のみ作成）
+            # ✅ members席作成
             c.execute(
                 """
                 INSERT INTO members(id, name, insta, is_active, created_at)
@@ -209,43 +216,30 @@ def ensure_schema_and_slots_once(max_members: int):
                 (str(date.today()), int(max_members))
             )
 
-            # ✅ 重要：SERIALのシーケンスを MAX(id)+1 に同期（duplicate key 対策）
-            # これをやると「次に採番される id」が既存と衝突しなくなる
+            # ✅ SERIALシーケンス自己修復（duplicate key 恒久対策）
             c.execute("""
             DO $$
             DECLARE
               seq TEXT;
             BEGIN
-              -- items
               seq := pg_get_serial_sequence('items','id');
               IF seq IS NOT NULL THEN
-                EXECUTE format(
-                  'SELECT setval(%L, COALESCE((SELECT MAX(id) FROM items),0)+1, false)', seq
-                );
+                EXECUTE format('SELECT setval(%L, COALESCE((SELECT MAX(id) FROM items),0)+1, false)', seq);
               END IF;
 
-              -- loans
               seq := pg_get_serial_sequence('loans','id');
               IF seq IS NOT NULL THEN
-                EXECUTE format(
-                  'SELECT setval(%L, COALESCE((SELECT MAX(id) FROM loans),0)+1, false)', seq
-                );
+                EXECUTE format('SELECT setval(%L, COALESCE((SELECT MAX(id) FROM loans),0)+1, false)', seq);
               END IF;
 
-              -- reservations
               seq := pg_get_serial_sequence('reservations','id');
               IF seq IS NOT NULL THEN
-                EXECUTE format(
-                  'SELECT setval(%L, COALESCE((SELECT MAX(id) FROM reservations),0)+1, false)', seq
-                );
+                EXECUTE format('SELECT setval(%L, COALESCE((SELECT MAX(id) FROM reservations),0)+1, false)', seq);
               END IF;
 
-              -- posts
               seq := pg_get_serial_sequence('posts','id');
               IF seq IS NOT NULL THEN
-                EXECUTE format(
-                  'SELECT setval(%L, COALESCE((SELECT MAX(id) FROM posts),0)+1, false)', seq
-                );
+                EXECUTE format('SELECT setval(%L, COALESCE((SELECT MAX(id) FROM posts),0)+1, false)', seq);
               END IF;
             END $$;
             """)
@@ -478,7 +472,7 @@ def photo_map_cached(item_ids: tuple[int, ...]):
 
 
 # ================================================================
-# 予約
+# 予約（現状維持）
 # ================================================================
 def can_reserve(item_id: int, reserver_id: int) -> tuple[bool, str]:
     r = db_fetchone("SELECT position FROM reservations WHERE item_id=%s AND reserver_id=%s", (item_id, reserver_id))
@@ -629,10 +623,10 @@ def run_app():
             except psycopg2.errors.UniqueViolation:
                 st.session_state["authed"] = False
                 st.error("登録名が重複しています。別の表記にしてください。")
-            except Exception as e:
+                st.code(traceback.format_exc())
+            except Exception:
                 st.session_state["authed"] = False
                 st.error("認証処理でエラーが発生しました")
-                st.code(str(e))
                 st.code(traceback.format_exc())
 
         authed = bool(st.session_state.get("authed", False))
@@ -650,13 +644,15 @@ def run_app():
 
     tab_inv, tab_list, tab_logs = st.tabs([" 在庫登録", " 在庫/貸出/予約", " 履歴"])
 
+    # ----------------------------
+    # 在庫登録（堅牢版）
+    # ----------------------------
     with tab_inv:
         st.subheader("在庫登録")
         if not authed:
             st.info("登録には認証が必要です。")
             st.stop()
 
-        # member_id / member_name の確定（NoneのままINSERTしない）
         try:
             member_id_int = int(member_id) if member_id is not None else None
         except Exception:
@@ -669,7 +665,6 @@ def run_app():
 
         with st.form("item_register_form", clear_on_submit=True):
             c1, c2 = st.columns(2)
-
             with c1:
                 name = st.text_input("パーツ名", value="")
                 cat_sel = st.multiselect("カテゴリ（1件選択）", CATEGORIES, max_selections=1)
@@ -701,7 +696,6 @@ def run_app():
             if not cond:
                 st.warning("状態を1つ選んで。"); st.stop()
 
-            # 画像処理（UploadedFile → bytes → PIL）
             blob = None
             try:
                 if pic is not None:
@@ -709,12 +703,11 @@ def run_app():
                     if raw:
                         img = Image.open(BytesIO(raw))
                         blob = img_to_blob(img)
-            except Exception as e:
+            except Exception:
                 st.error("画像の読み込み/変換に失敗しました（JPEG/PNGを確認）")
-                st.code(str(e))
+                st.code(traceback.format_exc())
                 st.stop()
 
-            # DB登録
             try:
                 db_exec(
                     """
@@ -726,12 +719,14 @@ def run_app():
                 clear_read_caches()
                 st.success("登録しました。")
                 st.rerun()
-            except Exception as e:
+            except Exception:
                 st.error("DB登録に失敗しました。エラー内容を確認して。")
-                st.code(str(e))
                 st.code(traceback.format_exc())
                 st.stop()
 
+    # ----------------------------
+    # 在庫一覧（現状維持）
+    # ----------------------------
     with tab_list:
         st.subheader("在庫一覧")
 
@@ -773,6 +768,9 @@ def run_app():
                         lines = [f"{pos}) {rname}（{rdt or '-'}）" for pos, rname, rid, rdt in resv_list]
                         st.markdown("**予約状況**  " + " / ".join(lines))
 
+    # ----------------------------
+    # 履歴
+    # ----------------------------
     with tab_logs:
         st.subheader("貸出・返却履歴")
         rows = loans_cached()
