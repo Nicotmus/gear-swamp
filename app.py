@@ -1,32 +1,32 @@
 # ================================================================
 # app.py --- Gear Swamp（Supabase/Postgres版・安定/高速・完全差替え）
 #
-# ✅ 修正ポイント（今回のエラー対策）
-# - members の席作成は generate_series で一括INSERT + ON CONFLICT DO NOTHING
-#   → Key(id)=n already exists の UniqueViolation が起きない
-# - members 登録/更新は INSERT せず UPDATE のみ（席を埋める方式）
+# ✅ 今回の目的：在庫（パーツ）登録を確実に通す
+# - 在庫登録を st.form 化（連打/二重登録/リラン事故を減らす）
+# - member_id / member_name の未設定を防止して INSERT 前に弾く
+# - 画像アップロードを getvalue→BytesIO→PIL に統一して堅牢化
+# - DB例外はその場で trace を表示（白画面防止）
+# - clear_read_caches を安全化（未定義キャッシュがあっても落ちない）
 #
 # ✅ 速度/安定
 # - psycopg2 接続プール
 # - N+1撲滅（在庫/予約）
 # - st.cache_data（TTL）
-# - photo(BYTEA=memoryview)は一覧キャッシュに含めず、bytes化して別キャッシュ
+# - photo(BYTEA=memoryview)は別キャッシュでbytes化
 # ================================================================
-import csv
-import html
+
 import base64
 import traceback
-from io import BytesIO, StringIO
+from io import BytesIO
 from contextlib import contextmanager
 from datetime import date, timedelta
-from urllib.parse import quote
 
-import qrcode
 import streamlit as st
 from PIL import Image
 from dateutil.parser import parse as dt_parse
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
+
 
 # ================================================================
 # 設定
@@ -39,7 +39,6 @@ MAX_RESERVATIONS_PER_ITEM = 3
 
 TTL_ITEMS = 10
 TTL_RESERVATIONS = 10
-TTL_POSTS = 10
 TTL_LOANS = 10
 TTL_MEMBERS = 30
 TTL_PHOTOS = 30
@@ -51,9 +50,9 @@ CATEGORIES = [
     "ディレイラー（F/R）", "クランク/BB", "スプロケット/コグ",
     "チェーン/チェーンリング", "ペダル", "ケーブル/アウター", "小物/ツール", "その他"
 ]
-POST_TYPES = ["試乗希望", "貸してほしい", "貸します", "譲ります", "雑談"]
 
 st.set_page_config(page_title="Gear Swamp", page_icon="icon_gearswamp.png", layout="wide")
+
 
 # ================================================================
 # DB: 接続プール
@@ -102,16 +101,24 @@ def db_fetchone(sql: str, params: tuple = ()):
             cur.execute(sql, params)
             return cur.fetchone()
 
+
 # ================================================================
-# キャッシュクリア（更新後に呼ぶ）
+# キャッシュクリア（更新後に呼ぶ）※安全化
 # ================================================================
+def _safe_clear(fn):
+    try:
+        if fn is not None and hasattr(fn, "clear"):
+            fn.clear()
+    except Exception:
+        pass
+
 def clear_read_caches():
-    list_items_cached.clear()
-    reservations_map_cached.clear()
-    photo_map_cached.clear()
-    posts_cached.clear()
-    loans_cached.clear()
-    member_slots_cached.clear()
+    _safe_clear(globals().get("list_items_cached"))
+    _safe_clear(globals().get("reservations_map_cached"))
+    _safe_clear(globals().get("photo_map_cached"))
+    _safe_clear(globals().get("loans_cached"))
+    _safe_clear(globals().get("member_slots_cached"))
+
 
 # ================================================================
 # 初期化耐性（テーブル作成＋席作成）
@@ -168,23 +175,10 @@ def ensure_schema_and_slots_once(max_members: int):
                 reserved_date TEXT
             )""")
 
-            c.execute("""
-            CREATE TABLE IF NOT EXISTS posts(
-                id SERIAL PRIMARY KEY,
-                author TEXT,
-                author_id INTEGER,
-                ptype TEXT,
-                category TEXT,
-                title TEXT,
-                body TEXT,
-                created TEXT
-            )""")
-
-            # 旧DB追従
+            # 旧DB追従（列が無い場合に追加）
             c.execute("ALTER TABLE items ADD COLUMN IF NOT EXISTS owner_id INTEGER")
             c.execute("ALTER TABLE loans ADD COLUMN IF NOT EXISTS borrower_id INTEGER")
             c.execute("ALTER TABLE reservations ADD COLUMN IF NOT EXISTS reserver_id INTEGER")
-            c.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS author_id INTEGER")
             c.execute("ALTER TABLE reservations ADD COLUMN IF NOT EXISTS position INTEGER")
             c.execute("ALTER TABLE reservations ADD COLUMN IF NOT EXISTS reserved_date TEXT")
 
@@ -193,7 +187,6 @@ def ensure_schema_and_slots_once(max_members: int):
             c.execute("CREATE INDEX IF NOT EXISTS idx_items_owner_id ON items(owner_id)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_resv_item_pos ON reservations(item_id, position)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_loans_item_status ON loans(item_id, status)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_posts_id_desc ON posts(id DESC)")
 
             # ✅席作成：一括INSERT（不足分のみ作成）
             c.execute(
@@ -208,6 +201,7 @@ def ensure_schema_and_slots_once(max_members: int):
 
         conn.commit()
     return True
+
 
 # ================================================================
 # 背景CSS
@@ -263,16 +257,6 @@ def set_background(image_path: str):
                 margin-left: .4rem;
             }}
 
-            .bbs-card {{
-                background-color: rgba(0,0,0,0.85);
-                border-radius: 10px;
-                padding: 0.8rem 1rem;
-                margin-bottom: 0.1rem;
-            }}
-            .bbs-title {{ font-weight:700; margin-bottom:.2rem; }}
-            .bbs-meta  {{ font-size:0.8rem; opacity:0.85; margin-bottom:0.4rem; }}
-            .bbs-body  {{ font-size:0.95rem; line-height:1.5; white-space:pre-wrap; }}
-
             .stApp a, .stApp a:link, .stApp a:visited {{ color:#8cc2ff !important; text-decoration: underline !important; }}
             .stApp a:hover {{ color:#c6e3ff !important; }}
             </style>
@@ -282,6 +266,7 @@ def set_background(image_path: str):
     except Exception as e:
         st.warning("背景の読み込みに失敗しました（bg_gearswamp.png を確認）")
         st.code(str(e))
+
 
 # ================================================================
 # 画像
@@ -310,6 +295,7 @@ def compute_due(start, days):
     except Exception:
         s = date.today()
     return s + timedelta(days=days)
+
 
 # ================================================================
 # members（UPDATEのみ）
@@ -355,9 +341,6 @@ def member_label(m):
     nm = m["name"] if m["name"] else "未登録"
     return f'{m["id"]} : {nm}'
 
-def member_name_by_id(mid: int):
-    r = db_fetchone("SELECT name FROM members WHERE id=%s", (mid,))
-    return r[0] if r and r[0] else None
 
 # ================================================================
 # 一覧（photo無し）＋ 予約まとめ ＋ photo別（bytes化してキャッシュ）
@@ -370,9 +353,7 @@ def list_items_cached(kw: str, f_cat: tuple[str, ...], f_owner: str, f_status: t
       COALESCE(om.name, i.owner) AS owner_name,
       i.owner_id,
       i.location, i.note, i.status,
-      COALESCE(rc.cnt, 0) AS reservation_count,
-      COALESCE(nm.name, nr.reserver) AS next_reserver_name,
-      nr.position AS next_position
+      COALESCE(rc.cnt, 0) AS reservation_count
     FROM items i
     LEFT JOIN members om ON i.owner_id = om.id
     LEFT JOIN (
@@ -380,8 +361,6 @@ def list_items_cached(kw: str, f_cat: tuple[str, ...], f_owner: str, f_status: t
       FROM reservations
       GROUP BY item_id
     ) rc ON rc.item_id = i.id
-    LEFT JOIN reservations nr ON nr.item_id = i.id AND nr.position = 1
-    LEFT JOIN members nm ON nr.reserver_id = nm.id
     WHERE 1=1
     """
     p = []
@@ -400,7 +379,7 @@ def list_items_cached(kw: str, f_cat: tuple[str, ...], f_owner: str, f_status: t
         p += list(f_status)
     if not show_arch:
         q += " AND i.status <> 'アーカイブ'"
-    q += " ORDER BY i.status DESC, i.category, i.name"
+    q += " ORDER BY i.id DESC"
     return db_fetchall(q, tuple(p))
 
 @st.cache_data(ttl=TTL_RESERVATIONS, show_spinner=False)
@@ -449,6 +428,7 @@ def photo_map_cached(item_ids: tuple[int, ...]):
             mp[int(iid)] = None
     return mp
 
+
 # ================================================================
 # 予約
 # ================================================================
@@ -488,8 +468,9 @@ def cancel_reservation(item_id: int, reserver_id: int) -> bool:
     clear_read_caches()
     return True
 
+
 # ================================================================
-# 掲示板/履歴（最低限）
+# 履歴（最低限）
 # ================================================================
 @st.cache_data(ttl=TTL_LOANS, show_spinner=False)
 def loans_cached():
@@ -505,6 +486,7 @@ def loans_cached():
         ORDER BY l.id DESC
         """
     )
+
 
 # ================================================================
 # App
@@ -603,6 +585,7 @@ def run_app():
                 st.session_state["authed"] = False
                 st.error("認証処理でエラーが発生しました")
                 st.code(str(e))
+                st.code(traceback.format_exc())
 
         authed = bool(st.session_state.get("authed", False))
         mid = st.session_state.get("member_id")
@@ -619,40 +602,94 @@ def run_app():
 
     tab_inv, tab_list, tab_logs = st.tabs([" 在庫登録", " 在庫/貸出/予約", " 履歴"])
 
+    # ============================================================
+    # 在庫登録（★ここが今回の主修正：フォーム化＋堅牢化）
+    # ============================================================
     with tab_inv:
         st.subheader("在庫登録")
         if not authed:
             st.info("登録には認証が必要です。")
             st.stop()
 
-        c1, c2 = st.columns(2)
-        with c1:
-            name = st.text_input("パーツ名")
-            cat_sel = st.multiselect("カテゴリ（1件選択）", CATEGORIES, max_selections=1)
-            cat = cat_sel[0] if cat_sel else ""
-            size = st.text_input("サイズ")
-            cond_sel = st.multiselect("状態（1件選択）", ["新品", "美品", "使用感あり", "要整備"], max_selections=1)
-            cond = cond_sel[0] if cond_sel else ""
+        # member_id / member_name の確定（NoneのままINSERTしない）
+        try:
+            member_id_int = int(member_id) if member_id is not None else None
+        except Exception:
+            member_id_int = None
+        member_name_str = (member_name or "").strip()
 
-        with c2:
-            st.text_input("所有者", value=f"{member_id} : {member_name}", disabled=True)
-            loc = st.text_input("保管場所")
-            note = st.text_area("備考", height=80)
-            pic = st.file_uploader("写真", type=["jpg", "jpeg", "png"])
+        if member_id_int is None or not member_name_str:
+            st.error("認証情報が不完全です（member_id / member_name が空）。左の認証をやり直して。")
+            st.stop()
 
-        if st.button("登録", disabled=not (name and cat and cond)):
-            blob = img_to_blob(Image.open(pic)) if pic else None
-            db_exec(
-                """
-                INSERT INTO items(name,category,size,condition,owner,owner_id,location,note,status,photo)
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'在庫あり',%s)
-                """,
-                (name, cat, size, cond, member_name, member_id, loc, note, blob),
-            )
-            clear_read_caches()
-            st.success("登録しました。")
-            st.rerun()
+        with st.form("item_register_form", clear_on_submit=True):
+            c1, c2 = st.columns(2)
 
+            with c1:
+                name = st.text_input("パーツ名", value="")
+                cat_sel = st.multiselect("カテゴリ（1件選択）", CATEGORIES, max_selections=1)
+                cat = cat_sel[0] if cat_sel else ""
+                size = st.text_input("サイズ", value="")
+                cond_sel = st.multiselect("状態（1件選択）", ["新品", "美品", "使用感あり", "要整備"], max_selections=1)
+                cond = cond_sel[0] if cond_sel else ""
+
+            with c2:
+                st.text_input("所有者", value=f"{member_id_int} : {member_name_str}", disabled=True)
+                loc = st.text_input("保管場所", value="")
+                note = st.text_area("備考", value="", height=80)
+                pic = st.file_uploader("写真（任意）", type=["jpg", "jpeg", "png"])
+
+            submitted_item = st.form_submit_button("登録")
+
+        if submitted_item:
+            name = (name or "").strip()
+            cat = (cat or "").strip()
+            cond = (cond or "").strip()
+            size = (size or "").strip()
+            loc = (loc or "").strip()
+            note = (note or "").strip()
+
+            if not name:
+                st.warning("パーツ名を入力して。"); st.stop()
+            if not cat:
+                st.warning("カテゴリを1つ選んで。"); st.stop()
+            if not cond:
+                st.warning("状態を1つ選んで。"); st.stop()
+
+            # 画像処理（堅牢化：UploadedFile → bytes → PIL）
+            blob = None
+            try:
+                if pic is not None:
+                    raw = pic.getvalue()
+                    if raw:
+                        img = Image.open(BytesIO(raw))
+                        blob = img_to_blob(img)
+            except Exception as e:
+                st.error("画像の読み込み/変換に失敗しました（JPEG/PNGを確認）")
+                st.code(str(e))
+                st.stop()
+
+            # DB登録
+            try:
+                db_exec(
+                    """
+                    INSERT INTO items(name,category,size,condition,owner,owner_id,location,note,status,photo)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'在庫あり',%s)
+                    """,
+                    (name, cat, size or None, cond, member_name_str, member_id_int, loc or None, note or None, blob),
+                )
+                clear_read_caches()
+                st.success("登録しました。")
+                st.rerun()
+            except Exception as e:
+                st.error("DB登録に失敗しました。エラー内容を確認して。")
+                st.code(str(e))
+                st.code(traceback.format_exc())
+                st.stop()
+
+    # ============================================================
+    # 在庫一覧 / 予約
+    # ============================================================
     with tab_list:
         st.subheader("在庫一覧")
 
@@ -667,28 +704,23 @@ def run_app():
         resv_map = reservations_map_cached(item_ids)
         photo_map = photo_map_cached(item_ids)
 
-        for (i, nm, cat, size, cond, owner_name, owner_id, loc, note, status,
-             resv_cnt, next_reserver_name, next_position) in items:
-
-            i = int(i)
-            resv_list = resv_map.get(i, [])
-            next_name = resv_list[0][1] if resv_list else (next_reserver_name if int(resv_cnt) else None)
-            next_pos = resv_list[0][0] if resv_list else (int(next_position) if next_position else None)
+        for (iid, nm, cat, size, cond, owner_name, owner_id, loc, note, status, resv_cnt) in items:
+            iid = int(iid)
+            resv_cnt = int(resv_cnt or 0)
+            resv_list = resv_map.get(iid, [])
 
             with st.container(border=True):
-                blob = photo_map.get(i)
+                blob = photo_map.get(iid)
                 img = blob_to_img(blob) if blob else None
                 if img:
                     st.image(img, width=900)
 
                 title_line = f"**{nm}**"
-                if int(resv_cnt) > 0:
-                    title_line += f' <span class="resv-badge">予約 {int(resv_cnt)}/{MAX_RESERVATIONS_PER_ITEM}</span>'
+                if resv_cnt > 0:
+                    title_line += f' <span class="resv-badge">予約 {resv_cnt}/{MAX_RESERVATIONS_PER_ITEM}</span>'
                 st.markdown(title_line, unsafe_allow_html=True)
 
                 st.caption(f"{cat} / サイズ:{size or '-'} / 状態:{cond} / 所有:{owner_name or '-'} / ステータス:{status}")
-                if status == "貸出中" and next_name:
-                    st.info(f"次の予約：{next_name}（{next_pos}番目）")
 
                 with st.expander("詳細", expanded=False):
                     st.caption(f"保管場所: {loc or '-'}")
@@ -700,29 +732,33 @@ def run_app():
                         st.markdown("**予約状況**  " + " / ".join(lines))
 
                 c_s, c_cancel = st.columns([1, 1])
-                if c_s.button(" 予約", key=f"s{i}"):
+
+                if c_s.button(" 予約", key=f"s{iid}"):
                     if not authed:
                         st.warning("予約には認証が必要です。")
                     else:
-                        ok, msg = can_reserve(i, int(member_id))
+                        ok, msg = can_reserve(iid, int(member_id))
                         if not ok:
                             st.warning(msg)
                         else:
-                            pos = create_reservation(i, int(member_id), member_name)
+                            pos = create_reservation(iid, int(member_id), member_name)
                             st.success(f"{pos}番目で予約しました")
                             st.rerun()
 
-                if c_cancel.button(" キャンセル", key=f"cxl{i}"):
+                if c_cancel.button(" キャンセル", key=f"cxl{iid}"):
                     if not authed:
                         st.warning("キャンセルには認証が必要です。")
                     else:
-                        done = cancel_reservation(i, int(member_id))
+                        done = cancel_reservation(iid, int(member_id))
                         if done:
                             st.success("予約をキャンセルしました（繰り上げ済）")
                             st.rerun()
                         else:
                             st.caption("自分の予約はありません。")
 
+    # ============================================================
+    # 履歴
+    # ============================================================
     with tab_logs:
         st.subheader("貸出・返却履歴")
         rows = loans_cached()
@@ -731,6 +767,7 @@ def run_app():
         else:
             for name, borrower_name, s, d, r, stt in rows:
                 st.caption(f"{name or '(削除済み)'} / 借り手:{borrower_name} / {s} → {r or '-'} / 返却目安:{d or '-'} / 状態:{stt}")
+
 
 # ================================================================
 # 実行（白画面防止）
