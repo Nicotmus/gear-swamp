@@ -2,11 +2,15 @@
 # app.py --- Gear Swamp（Supabase/Postgres版・高速化フルセット＋改善版）
 #
 # ✅ 機能は維持（在庫/貸出/予約/掲示板/履歴/メンバー/CSV/バックアップ/QR）
-# ✅ 改善点
-# - 【重要】SERIAL/IDENTITY のシーケンス自己修復（duplicate key対策）
+# ✅ 改善点（最小侵襲でスリープ復帰に強くする）
+# - 起動時にDB ping（軽い）→OKの時だけ重い初期化/修復を実行
+# - ping NG なら「修復ボタン」を表示して待機（白画面で死なない）
+# - スマホでも「修復ボタン」を押せば復帰できる（PC必須ではない）
+# - SERIAL/IDENTITY のシーケンス自己修復（duplicate key対策）
+# - reservations.position 焼き直し（崩れ復旧）
 # - members席は generate_series + ON CONFLICT（高速・安定）
 # - 在庫登録はフォーム化＋画像アップロード堅牢化（getvalue→BytesIO→PIL）
-# - ライト/ライドモードで文字が見えない問題をCSSで改善（入力/ボタン/タブ）
+# - CSSはライト/ダーク両対応（読めない問題を改善）
 # - cache_dataにBYTEA(photo=memoryview)を入れない（従来の方針維持）
 # ================================================================
 
@@ -16,12 +20,12 @@ import base64
 import traceback
 from io import BytesIO, StringIO
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from urllib.parse import quote
 
 import qrcode
 import streamlit as st
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from dateutil.parser import parse as dt_parse
 import psycopg2
 from psycopg2.pool import SimpleConnectionPool
@@ -54,6 +58,22 @@ CATEGORIES = [
 POST_TYPES = ["試乗希望", "貸してほしい", "貸します", "譲ります", "雑談"]
 
 st.set_page_config(page_title="Gear Swamp", page_icon="icon_gearswamp.png", layout="wide")
+
+
+# ================================================================
+# SAFE BOOT（白画面回避：最初に必ず見える表示）
+# ================================================================
+st.markdown(
+    """
+    <div style="padding:12px;border-radius:10px;border:1px solid rgba(0,0,0,0.15);
+                background:rgba(255,255,255,0.92);color:#111;">
+      <div style="font-weight:800;font-size:16px;">Gear Swamp 起動中…</div>
+      <div style="font-size:12px;opacity:0.75;">スリープ復帰直後は重い処理を遅延します</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+st.caption(f"boot_ts: {datetime.now().isoformat(timespec='seconds')}")
 
 
 # ================================================================
@@ -103,12 +123,19 @@ def db_fetchone(sql: str, params: tuple = ()):
             cur.execute(sql, params)
             return cur.fetchone()
 
+def db_ping() -> tuple[bool, str]:
+    """スリープ復帰直後の軽量チェック（重い初期化はしない）"""
+    try:
+        r = db_fetchone("SELECT 1")
+        return (bool(r), "ok")
+    except Exception as e:
+        return (False, f"{type(e).__name__}: {e}")
+
 
 # ================================================================
 # キャッシュクリア（更新後に呼ぶ）
 # ================================================================
 def clear_read_caches():
-    # ここは全関数が存在している前提（完全差し替え版なのでOK）
     list_items_cached.clear()
     reservations_map_cached.clear()
     posts_cached.clear()
@@ -118,7 +145,7 @@ def clear_read_caches():
 
 
 # ================================================================
-# 初期化耐性（スキーマ保証＋移行＋シーケンス自己修復）
+# 初期化耐性（スキーマ保証＋移行＋シーケンス自己修復＋予約position焼き直し）
 # ================================================================
 @st.cache_resource(show_spinner=False)
 def ensure_schema_and_migrate_once(max_members: int):
@@ -207,7 +234,7 @@ def ensure_schema_and_migrate_once(max_members: int):
                 FROM generate_series(1, %s) AS gs
                 ON CONFLICT (id) DO NOTHING
                 """,
-                (str(date.today()), int(max_members))
+                (datetime.now().isoformat(timespec="seconds"), int(max_members))
             )
 
             # バックフィル（厳密一致）
@@ -264,131 +291,158 @@ def ensure_schema_and_migrate_once(max_members: int):
             END $$;
             """)
 
+            # ✅ reservations.position 焼き直し（NULL/重複/抜けを 1..n に整列）
+            c.execute("""
+            WITH ranked AS (
+              SELECT
+                id,
+                item_id,
+                ROW_NUMBER() OVER (PARTITION BY item_id ORDER BY COALESCE(position, 9999), id) AS new_pos
+              FROM reservations
+            )
+            UPDATE reservations r
+            SET position = ranked.new_pos
+            FROM ranked
+            WHERE r.id = ranked.id
+              AND (r.position IS DISTINCT FROM ranked.new_pos);
+            """)
+
+            # 上限超過は削除（念のため）
+            c.execute(
+                "DELETE FROM reservations WHERE position > %s",
+                (MAX_RESERVATIONS_PER_ITEM,)
+            )
+
         conn.commit()
     return True
 
 
 # ================================================================
-# 背景CSS（ライト/ライドモードでも読めるように改善）
+# 背景CSS（ライト/ダーク両対応）
 # ================================================================
 def set_background(image_path: str):
     try:
         with open(image_path, "rb") as f:
             data = f.read()
         encoded = base64.b64encode(data).decode("utf-8")
+    except Exception:
+        encoded = None
 
-        st.markdown(
-            f"""
-            <style>
-            /* 背景 */
-            .stApp {{
-                background: url("data:image/png;base64,{encoded}") no-repeat center center fixed;
-                background-size: cover;
-            }}
-            .stApp > div {{ background-color: rgba(0,0,0,0.40); }}
+    bg = ""
+    if encoded:
+        bg = f"""
+        .stApp {{
+            background: url("data:image/png;base64,{encoded}") no-repeat center center fixed;
+            background-size: cover;
+        }}
+        """
 
-            /* ここが肝：ライト/ダーク両対応で可読性を確保 */
-            :root {{
-              --gs-text: #f5f5f5;
-              --gs-panel: rgba(0,0,0,0.80);
-              --gs-input-bg: #222;
-              --gs-input-fg: #f5f5f5;
-              --gs-border: #555;
-              --gs-muted: #aaa;
-              --gs-accent: #ff4b4b;
-            }}
-            @media (prefers-color-scheme: light) {{
-              :root {{
-                --gs-text: #111;
-                --gs-panel: rgba(255,255,255,0.86);
-                --gs-input-bg: #ffffff;
-                --gs-input-fg: #111111;
-                --gs-border: #cfcfcf;
-                --gs-muted: #666;
-              }}
-              .stApp > div {{ background-color: rgba(255,255,255,0.55); }}
-            }}
+    st.markdown(
+        f"""
+        <style>
+        {bg}
+        .stApp > div {{ background-color: rgba(0,0,0,0.40); }}
 
-            html, body {{ color: var(--gs-text) !important; }}
-            section[data-testid="stSidebar"] {{
-                background-color: var(--gs-panel) !important;
-            }}
+        :root {{
+          --gs-text: #f5f5f5;
+          --gs-panel: rgba(0,0,0,0.80);
+          --gs-input-bg: #222;
+          --gs-input-fg: #f5f5f5;
+          --gs-border: #555;
+          --gs-muted: #aaa;
+          --gs-accent: #ff4b4b;
+        }}
+        @media (prefers-color-scheme: light) {{
+          :root {{
+            --gs-text: #111;
+            --gs-panel: rgba(255,255,255,0.86);
+            --gs-input-bg: #ffffff;
+            --gs-input-fg: #111111;
+            --gs-border: #cfcfcf;
+            --gs-muted: #666;
+          }}
+          .stApp > div {{ background-color: rgba(255,255,255,0.55); }}
+        }}
 
-            /* 入力・セレクト・テキストエリアが「白地に白文字」になる事故を潰す */
-            .stApp input, .stApp textarea, .stApp select {{
-                color: var(--gs-input-fg) !important;
-                background-color: var(--gs-input-bg) !important;
-                border: 1px solid var(--gs-border) !important;
-            }}
-            .stApp ::placeholder {{ color: var(--gs-muted) !important; opacity: 1 !important; }}
+        html, body {{ color: var(--gs-text) !important; }}
+        section[data-testid="stSidebar"] {{ background-color: var(--gs-panel) !important; }}
 
-            /* タブ */
-            .stApp button[role="tab"] {{
-                border-radius: 18px 18px 0 0 !important;
-                background-color: rgba(20,20,20,0.85) !important;
-                color: #dddddd !important;
-                border: 1px solid rgba(255,255,255,0.18) !important;
-                padding: 0.5rem 1.2rem !important;
-                font-weight: 700 !important;
-            }}
-            @media (prefers-color-scheme: light) {{
-              .stApp button[role="tab"] {{
-                background-color: rgba(255,255,255,0.95) !important;
-                color: #111 !important;
-                border: 1px solid rgba(0,0,0,0.18) !important;
-              }}
-            }}
-            .stApp button[role="tab"][aria-selected="true"] {{
-                background: linear-gradient(135deg, #ff6b6b, var(--gs-accent)) !important;
-                color: #ffffff !important;
-                border-color: #ff8a8a !important;
-            }}
+        .stApp input, .stApp textarea, .stApp select {{
+            color: var(--gs-input-fg) !important;
+            background-color: var(--gs-input-bg) !important;
+            border: 1px solid var(--gs-border) !important;
+        }}
+        .stApp ::placeholder {{ color: var(--gs-muted) !important; opacity: 1 !important; }}
 
-            /* ボタン */
-            .stApp button {{
-                background-color: rgba(40,40,40,0.85) !important;
-                color: var(--gs-text) !important;
-                border: 1px solid rgba(255,255,255,0.18) !important;
-                border-radius: 8px !important;
-            }}
-            @media (prefers-color-scheme: light) {{
-              .stApp button {{
-                background-color: rgba(255,255,255,0.95) !important;
-                border: 1px solid rgba(0,0,0,0.18) !important;
-              }}
-            }}
+        .stApp div[data-baseweb="select"] > div {{
+          background-color: var(--gs-input-bg) !important;
+          color: var(--gs-input-fg) !important;
+          border-color: var(--gs-border) !important;
+        }}
+        .stApp div[data-baseweb="select"] span {{ color: var(--gs-input-fg) !important; }}
 
-            .resv-badge {{
-                display:inline-block;
-                padding: 0.1rem 0.55rem;
-                border-radius: 999px;
-                border: 1px solid rgba(255,255,255,0.25);
-                background: rgba(255,75,75,0.18);
-                font-size: 0.8rem;
-                margin-left: .4rem;
-            }}
+        .stApp button[role="tab"] {{
+            border-radius: 18px 18px 0 0 !important;
+            background-color: rgba(20,20,20,0.85) !important;
+            color: #dddddd !important;
+            border: 1px solid rgba(255,255,255,0.18) !important;
+            padding: 0.5rem 1.2rem !important;
+            font-weight: 700 !important;
+        }}
+        @media (prefers-color-scheme: light) {{
+          .stApp button[role="tab"] {{
+            background-color: rgba(255,255,255,0.95) !important;
+            color: #111 !important;
+            border: 1px solid rgba(0,0,0,0.18) !important;
+          }}
+        }}
+        .stApp button[role="tab"][aria-selected="true"] {{
+            background: linear-gradient(135deg, #ff6b6b, var(--gs-accent)) !important;
+            color: #ffffff !important;
+            border-color: #ff8a8a !important;
+        }}
 
-            .bbs-card {{
-                background-color: var(--gs-panel);
-                border-radius: 10px;
-                padding: 0.8rem 1rem;
-                margin-bottom: 0.35rem;
-            }}
-            .bbs-title {{ font-weight: 800; margin-bottom: .2rem; }}
-            .bbs-meta  {{ font-size: 0.8rem; opacity: 0.85; margin-bottom: 0.4rem; }}
-            .bbs-body  {{ font-size: 0.95rem; line-height: 1.5; white-space: pre-wrap; }}
+        .stApp button {{
+            background-color: rgba(40,40,40,0.85) !important;
+            color: var(--gs-text) !important;
+            border: 1px solid rgba(255,255,255,0.18) !important;
+            border-radius: 8px !important;
+        }}
+        @media (prefers-color-scheme: light) {{
+          .stApp button {{
+            background-color: rgba(255,255,255,0.95) !important;
+            border: 1px solid rgba(0,0,0,0.18) !important;
+          }}
+        }}
 
-            .stApp a, .stApp a:link, .stApp a:visited {{
-              color: #8cc2ff !important; text-decoration: underline !important;
-            }}
-            .stApp a:hover {{ color: #c6e3ff !important; }}
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-    except Exception as e:
-        st.warning("背景の読み込みに失敗しました（bg_gearswamp.png を確認）")
-        st.code(str(e))
+        .resv-badge {{
+            display:inline-block;
+            padding: 0.1rem 0.55rem;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.25);
+            background: rgba(255,75,75,0.18);
+            font-size: 0.8rem;
+            margin-left: .4rem;
+        }}
+
+        .bbs-card {{
+            background-color: var(--gs-panel);
+            border-radius: 10px;
+            padding: 0.8rem 1rem;
+            margin-bottom: 0.35rem;
+        }}
+        .bbs-title {{ font-weight: 800; margin-bottom: .2rem; }}
+        .bbs-meta  {{ font-size: 0.8rem; opacity: 0.85; margin-bottom: 0.4rem; }}
+        .bbs-body  {{ font-size: 0.95rem; line-height: 1.5; white-space: pre-wrap; }}
+
+        .stApp a, .stApp a:link, .stApp a:visited {{
+          color: #8cc2ff !important; text-decoration: underline !important;
+        }}
+        .stApp a:hover {{ color: #c6e3ff !important; }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # ================================================================
@@ -413,7 +467,6 @@ def img_to_blob(img, max_px=1400):
     return b.getvalue()
 
 def file_to_blob(uploaded_file):
-    """UploadedFile → JPEG bytes（失敗してもNoneで落ちない）"""
     if uploaded_file is None:
         return None
     raw = uploaded_file.getvalue()
@@ -422,6 +475,8 @@ def file_to_blob(uploaded_file):
     try:
         img = Image.open(BytesIO(raw))
         return img_to_blob(img)
+    except UnidentifiedImageError:
+        return None
     except Exception:
         return None
 
@@ -551,7 +606,7 @@ def cancel_reservation(item_id: int, reserver_id: int) -> bool:
 
 
 # ================================================================
-# 在庫一覧（photo無しでキャッシュ）
+# ★在庫一覧：photoを含めずにキャッシュ（pickle問題回避）
 # ================================================================
 @st.cache_data(ttl=TTL_ITEMS, show_spinner=False)
 def list_items_cached(kw: str, f_cat: tuple[str, ...], f_owner: str, f_status: tuple[str, ...], show_arch: bool):
@@ -603,7 +658,7 @@ def list_items_cached(kw: str, f_cat: tuple[str, ...], f_owner: str, f_status: t
 
 
 # ================================================================
-# 画像だけ別で取って bytes にしてキャッシュ
+# ★画像だけ別で取って bytes にしてキャッシュ（pickle可能）
 # ================================================================
 @st.cache_data(ttl=TTL_PHOTOS, show_spinner=False)
 def photo_map_cached(item_ids: tuple[int, ...]):
@@ -683,21 +738,53 @@ def loans_cached():
 # App本体
 # ================================================================
 def run_app():
-    ensure_schema_and_migrate_once(MAX_MEMBERS)
+    # まずはCSSだけ（軽い）
     set_background("bg_gearswamp.png")
 
+    # --- スリープ復帰対策：最初は軽い ping だけ ---
+    st.session_state.setdefault("_schema_ready", False)
+
+    ok, msg = db_ping()
+    with st.sidebar:
+        st.subheader("復帰状態")
+        st.caption(f"DB ping: {'OK' if ok else 'NG'}")
+        if not ok:
+            st.warning("スリープ復帰直後はDBが起きていない場合があります。")
+            st.code(msg)
+
+        st.divider()
+        st.subheader("初期化/修復（オーブン）")
+        st.caption("白画面/登録失敗/予約崩れが出たら押す（スマホでもOK）")
+        if st.button("DB初期化/修復を実行"):
+            ensure_schema_and_migrate_once(MAX_MEMBERS)
+            st.session_state["_schema_ready"] = True
+            clear_read_caches()
+            st.success("修復が完了しました。")
+            st.rerun()
+
+    if not ok:
+        st.info("DBがまだ起床していません。少し待って再読み込みするか、右の修復ボタンを押して。")
+        st.stop()
+
+    # ping OK の時だけ初期化（ただし毎回はやらない：スリープ復帰で重くしない）
+    if not st.session_state.get("_schema_ready", False):
+        ensure_schema_and_migrate_once(MAX_MEMBERS)
+        st.session_state["_schema_ready"] = True
+
+    # 以降は元の動き（ほぼそのまま）
     st.session_state.setdefault("authed", False)
     st.session_state.setdefault("member_id", None)
     st.session_state.setdefault("member_name", "")
     st.session_state.setdefault("insta_input", "")
     st.session_state.setdefault("last_borrowed_item_id", None)
 
-    # --- Sidebar ---
+    # --- Sidebar 認証 ---
     slots = member_slots_cached(MAX_MEMBERS)
     label_list = [member_label(m) for m in slots]
     label_to_id = {member_label(m): m["id"] for m in slots}
 
     with st.sidebar:
+        st.divider()
         st.subheader("メンバー認証（番号＋パス）")
 
         default_mid = st.session_state.get("member_id") or 1
@@ -859,7 +946,7 @@ def run_app():
                 st.stop()
 
     # ============================================================
-    # 在庫/貸出/予約
+    # 在庫/貸出/予約（以下は“貼ってくれた現状のまま”）
     # ============================================================
     with tab_list:
         st.subheader("在庫一覧")
@@ -980,9 +1067,9 @@ def run_app():
                     if not authed:
                         st.warning("予約には認証が必要です。")
                     else:
-                        ok, msg = can_reserve(i, int(member_id))
-                        if not ok:
-                            st.warning(msg)
+                        ok2, msg2 = can_reserve(i, int(member_id))
+                        if not ok2:
+                            st.warning(msg2)
                         else:
                             pos = create_reservation(i, int(member_id), member_name)
                             st.success(f"{pos}番目で予約しました")
@@ -1041,11 +1128,10 @@ def run_app():
                     st.markdown(f"[ この貸出をLINEで共有]({line_url_item})")
 
     # ============================================================
-    # 掲示板
+    # 掲示板 / 履歴 / メンバー / CSV / バックアップ（現状のまま）
     # ============================================================
     with tab_bbs:
         st.subheader(" 掲示板（試乗・貸し借り・雑談）")
-
         st.markdown("### 新規投稿")
         if authed:
             ptype = st.selectbox("種別", POST_TYPES)
@@ -1125,9 +1211,6 @@ def run_app():
                         st.success("投稿を削除しました。")
                         st.rerun()
 
-    # ============================================================
-    # 履歴
-    # ============================================================
     with tab_logs:
         st.subheader("貸出・返却履歴")
         rows = loans_cached()
@@ -1140,12 +1223,8 @@ def run_app():
                     f"返却目安:{d or '-'} / 状態:{stt}"
                 )
 
-    # ============================================================
-    # メンバー
-    # ============================================================
     with tab_mem:
         st.subheader("メンバー（番号席）")
-
         st.markdown("### メンバー一覧")
         slots2 = member_slots_cached(MAX_MEMBERS)
         for m in slots2:
@@ -1169,9 +1248,6 @@ def run_app():
                 st.success("更新しました。")
                 st.rerun()
 
-    # ============================================================
-    # CSV
-    # ============================================================
     with tab_csv:
         st.subheader("CSV一括登録（在庫）")
 
@@ -1217,9 +1293,6 @@ def run_app():
                 st.success(f"{count} 件 登録しました。")
                 st.rerun()
 
-    # ============================================================
-    # バックアップ
-    # ============================================================
     with tab_backup:
         st.subheader(" バックアップ（Supabase運用）")
         st.info(
